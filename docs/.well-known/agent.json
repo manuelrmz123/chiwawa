@@ -1,12 +1,12 @@
 {
-  "agentId": "did:web:manuelrmz123.github.io",
+  "agentId": "did:web:chiwawa.vercel.app",
   "name": "Chiwawa",
   "description": "Unified public registry of AI agents. Automatically discovers, indexes, and tracks agents across A2A and MCP protocols. Provides identity, health status, and capability data for agents in the ecosystem.",
-  "url": "https://manuelrmz123.github.io/chiwawa",
+  "url": "https://chiwawa.vercel.app",
   "version": "0.1.0",
   "provider": {
     "organization": "Chiwawa",
-    "url": "https://manuelrmz123.github.io/chiwawa"
+    "url": "https://chiwawa.vercel.app"
   },
   "capabilities": {
     "streaming": false,
