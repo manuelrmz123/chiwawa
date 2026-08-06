@@ -2,6 +2,7 @@ import os
 import json
 import psycopg2
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,10 +24,13 @@ class Handler(BaseHTTPRequestHandler):
         pass  # suppress request logs
 
     def do_GET(self):
-        if self.path == "/":
+        parsed = urlparse(self.path)
+        if parsed.path == "/":
             self.serve_file("dashboard/index.html", "text/html")
-        elif self.path == "/data":
+        elif parsed.path == "/data":
             self.serve_data()
+        elif parsed.path == "/agents":
+            self.serve_agents(parse_qs(parsed.query))
         else:
             self.send_error(404)
 
@@ -79,6 +83,41 @@ class Handler(BaseHTTPRequestHandler):
         }
 
         payload = json.dumps(data, default=str).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+    def serve_agents(self, qs: dict):
+        agent_type = qs.get("type", [None])[0]
+        page = int(qs.get("page", [1])[0])
+        limit = int(qs.get("limit", [50])[0])
+        limit = min(limit, 500)
+        offset = (page - 1) * limit
+
+        where = "WHERE type = %s" if agent_type else ""
+        params_count = [agent_type] if agent_type else []
+        params_data = ([agent_type] if agent_type else []) + [limit, offset]
+
+        total = query(f"SELECT COUNT(*) AS n FROM agents {where}", params_count)[0]["n"]
+        agents = query(f"""
+            SELECT name, type, status, base_url, provider_name,
+                   first_seen_at AT TIME ZONE 'UTC' AS first_seen_at
+            FROM agents
+            {where}
+            ORDER BY first_seen_at DESC
+            LIMIT %s OFFSET %s
+        """, params_data)
+
+        payload = json.dumps({
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "agents": agents,
+        }, default=str).encode()
+
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")

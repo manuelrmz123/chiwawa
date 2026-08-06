@@ -10,7 +10,9 @@
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 4px; color: #fff; }
     .subtitle { font-size: 13px; color: #666; margin-bottom: 32px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 32px; }
-    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 20px; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 20px; cursor: pointer; transition: border-color 0.15s; }
+    .card:hover { border-color: #444; }
+    .card.active { border-color: #38bdf8; }
     .card .label { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
     .card .value { font-size: 32px; font-weight: 700; color: #fff; }
     .card .sub { font-size: 12px; color: #555; margin-top: 4px; }
@@ -36,6 +38,15 @@
     .refresh { display: inline-flex; align-items: center; gap: 6px; background: #1a1a1a; border: 1px solid #2a2a2a; color: #ccc; font-size: 13px; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-bottom: 24px; }
     .refresh:hover { background: #222; }
     .ts { color: #555; font-size: 12px; }
+    .agent-list-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .agent-list-header h2 { font-size: 14px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .controls { display: flex; align-items: center; gap: 10px; }
+    select { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ccc; font-size: 12px; padding: 5px 8px; border-radius: 5px; }
+    .pagination { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #666; }
+    .page-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ccc; font-size: 12px; padding: 5px 12px; border-radius: 5px; cursor: pointer; }
+    .page-btn:hover { background: #222; }
+    .page-btn:disabled { opacity: 0.3; cursor: default; }
+    #agent-list { margin-bottom: 32px; }
     .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 32px; }
     .status-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 14px; display: flex; justify-content: space-between; align-items: center; }
     .status-card .s-label { font-size: 12px; color: #666; }
@@ -52,11 +63,34 @@
 <button class="refresh" onclick="load()">↻ Refresh</button>
 
 <div class="grid" id="totals">
-  <div class="card"><div class="label">Total Agents</div><div class="value" id="t-total">—</div></div>
-  <div class="card"><div class="label">A2A</div><div class="value" id="t-a2a">—</div></div>
-  <div class="card"><div class="label">MCP Live</div><div class="value" id="t-mcp-live">—</div></div>
-  <div class="card"><div class="label">MCP Package</div><div class="value" id="t-mcp-pkg">—</div></div>
-  <div class="card"><div class="label">Seed Domains</div><div class="value" id="t-seeds">—</div><div class="sub" id="t-pending"></div></div>
+  <div class="card" onclick="showList(null)"  id="card-all"><div class="label">Total Agents</div><div class="value" id="t-total">—</div></div>
+  <div class="card" onclick="showList('a2a')"  id="card-a2a"><div class="label">A2A</div><div class="value" id="t-a2a">—</div></div>
+  <div class="card" onclick="showList('mcp_live')"  id="card-mcp_live"><div class="label">MCP Live</div><div class="value" id="t-mcp-live">—</div></div>
+  <div class="card" onclick="showList('mcp_package')" id="card-mcp_package"><div class="label">MCP Package</div><div class="value" id="t-mcp-pkg">—</div></div>
+  <div class="card" style="cursor:default"><div class="label">Seed Domains</div><div class="value" id="t-seeds">—</div><div class="sub" id="t-pending"></div></div>
+</div>
+
+<div id="agent-list" style="display:none">
+  <div class="agent-list-header">
+    <h2 id="list-title">Agents</h2>
+    <div class="controls">
+      <select id="per-page" onchange="goPage(1)">
+        <option value="10">View 10</option>
+        <option value="50" selected>View 50</option>
+        <option value="100">View 100</option>
+        <option value="500">View 500</option>
+      </select>
+      <div class="pagination">
+        <button class="page-btn" id="btn-prev" onclick="goPage(currentPage - 1)">← Prev</button>
+        <span id="page-info">Page 1</span>
+        <button class="page-btn" id="btn-next" onclick="goPage(currentPage + 1)">Next →</button>
+      </div>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Provider</th><th>URL</th><th>First Seen</th></tr></thead>
+    <tbody id="list-body"></tbody>
+  </table>
 </div>
 
 <div class="section">
@@ -88,6 +122,55 @@
 
   function badge(cls, label) {
     return `<span class="badge ${cls}">${label}</span>`;
+  }
+
+  let currentType = null;
+  let currentPage = 1;
+
+  async function showList(type) {
+    currentType = type;
+    goPage(1);
+
+    document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+    const cardId = type ? `card-${type}` : 'card-all';
+    const card = document.getElementById(cardId);
+    if (card) card.classList.add('active');
+
+    const labels = { null: 'All Agents', a2a: 'A2A Agents', mcp_live: 'MCP Live Agents', mcp_package: 'MCP Package Agents' };
+    document.getElementById('list-title').textContent = labels[type] || 'All Agents';
+    document.getElementById('agent-list').style.display = 'block';
+    document.getElementById('agent-list').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  async function goPage(page) {
+    currentPage = page;
+    const limit = document.getElementById('per-page').value;
+    const params = new URLSearchParams({ page: currentPage, limit });
+    if (currentType) params.set('type', currentType);
+
+    try {
+      const res = await fetch(`/agents?${params}`);
+      const d = await res.json();
+
+      const totalPages = Math.ceil(d.total / d.limit);
+      document.getElementById('page-info').textContent = `Page ${currentPage} of ${totalPages} (${d.total.toLocaleString()} total)`;
+      document.getElementById('btn-prev').disabled = currentPage <= 1;
+      document.getElementById('btn-next').disabled = currentPage >= totalPages;
+
+      const lb = document.getElementById('list-body');
+      lb.innerHTML = d.agents.map(a =>
+        `<tr>
+          <td>${a.name || '—'}</td>
+          <td>${badge(a.type, a.type)}</td>
+          <td>${badge(a.status, a.status)}</td>
+          <td style="color:#888;font-size:12px">${a.provider_name || '—'}</td>
+          <td><a href="${a.base_url}" target="_blank" style="max-width:200px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom">${a.base_url || '—'}</a></td>
+          <td class="ts">${fmt(a.first_seen_at)}</td>
+        </tr>`
+      ).join('') || `<tr><td colspan="6" style="color:#555;text-align:center;padding:20px">No agents found.</td></tr>`;
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   async function load() {
