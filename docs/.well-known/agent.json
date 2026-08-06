@@ -1,0 +1,43 @@
+{
+  "agentId": "did:web:manuelrmz123.github.io",
+  "name": "Chiwawa",
+  "description": "Unified public registry of AI agents. Automatically discovers, indexes, and tracks agents across A2A and MCP protocols. Provides identity, health status, and capability data for agents in the ecosystem.",
+  "url": "https://manuelrmz123.github.io/chiwawa",
+  "version": "0.1.0",
+  "provider": {
+    "organization": "Chiwawa",
+    "url": "https://manuelrmz123.github.io/chiwawa"
+  },
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "authentication": {
+    "schemes": []
+  },
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
+  "skills": [
+    {
+      "id": "search_agents",
+      "name": "Search Agents",
+      "description": "Search the registry for AI agents by name, capability, or protocol type",
+      "tags": ["discovery", "registry", "search", "a2a", "mcp"],
+      "examples": ["Find agents that process invoices", "List all active A2A agents"]
+    },
+    {
+      "id": "get_agent",
+      "name": "Get Agent",
+      "description": "Retrieve full details, health status, and capability card for a specific agent",
+      "tags": ["registry", "identity", "health"],
+      "examples": ["Get details for agent ID xyz"]
+    },
+    {
+      "id": "submit_agent",
+      "name": "Submit Agent",
+      "description": "Submit a domain to be crawled and indexed in the registry",
+      "tags": ["registry", "submission", "indexing"],
+      "examples": ["Add my-agent.example.com to the registry"]
+    }
+  ]
+}
