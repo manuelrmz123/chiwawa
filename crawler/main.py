@@ -41,7 +41,7 @@ async def crawl_domain(domain_info: dict, db_url: str, semaphore: asyncio.Semaph
 
 
 async def run_crawl():
-    db_url = os.getenv("DATABASE_URL")
+    db_url = os.getenv("DATABASE_URL", "").strip()
     if not db_url:
         raise ValueError("DATABASE_URL not set in .env")
 
