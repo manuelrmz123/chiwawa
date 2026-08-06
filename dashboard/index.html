@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chiwawa — Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 32px; }
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 4px; color: #fff; }
+    .subtitle { font-size: 13px; color: #666; margin-bottom: 32px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 20px; }
+    .card .label { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+    .card .value { font-size: 32px; font-weight: 700; color: #fff; }
+    .card .sub { font-size: 12px; color: #555; margin-top: 4px; }
+    .section { margin-bottom: 32px; }
+    .section h2 { font-size: 14px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; overflow: hidden; }
+    th { text-align: left; font-size: 11px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.05em; padding: 10px 14px; border-bottom: 1px solid #2a2a2a; }
+    td { font-size: 13px; padding: 10px 14px; border-bottom: 1px solid #1e1e1e; color: #ccc; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1f1f1f; }
+    .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+    .badge.active    { background: #0a2e1a; color: #4ade80; }
+    .badge.degraded  { background: #2e1f0a; color: #fb923c; }
+    .badge.unresponsive { background: #2a1a1a; color: #f87171; }
+    .badge.unreachable  { background: #2a1a1a; color: #f87171; }
+    .badge.gone      { background: #1a1a2a; color: #818cf8; }
+    .badge.archived  { background: #1a1a1a; color: #555; }
+    .badge.a2a       { background: #0a1e2e; color: #38bdf8; }
+    .badge.mcp_live  { background: #1a0a2e; color: #a78bfa; }
+    .badge.mcp_package { background: #1a1a2e; color: #818cf8; }
+    .ok  { color: #4ade80; }
+    .err { color: #f87171; }
+    .refresh { display: inline-flex; align-items: center; gap: 6px; background: #1a1a1a; border: 1px solid #2a2a2a; color: #ccc; font-size: 13px; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-bottom: 24px; }
+    .refresh:hover { background: #222; }
+    .ts { color: #555; font-size: 12px; }
+    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 32px; }
+    .status-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 14px; display: flex; justify-content: space-between; align-items: center; }
+    .status-card .s-label { font-size: 12px; color: #666; }
+    .status-card .s-count { font-size: 22px; font-weight: 700; color: #fff; }
+    a { color: #38bdf8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<h1>Chiwawa</h1>
+<p class="subtitle">Agent Registry — Internal Dashboard</p>
+
+<button class="refresh" onclick="load()">↻ Refresh</button>
+
+<div class="grid" id="totals">
+  <div class="card"><div class="label">Total Agents</div><div class="value" id="t-total">—</div></div>
+  <div class="card"><div class="label">A2A</div><div class="value" id="t-a2a">—</div></div>
+  <div class="card"><div class="label">MCP Live</div><div class="value" id="t-mcp-live">—</div></div>
+  <div class="card"><div class="label">MCP Package</div><div class="value" id="t-mcp-pkg">—</div></div>
+  <div class="card"><div class="label">Seed Domains</div><div class="value" id="t-seeds">—</div><div class="sub" id="t-pending"></div></div>
+</div>
+
+<div class="section">
+  <h2>By Status</h2>
+  <div class="status-grid" id="status-grid"></div>
+</div>
+
+<div class="section">
+  <h2>Last 10 Agents Discovered</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>URL</th><th>First Seen</th></tr></thead>
+    <tbody id="agents-body"></tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Last 20 Crawl Log Entries</h2>
+  <table>
+    <thead><tr><th>Domain</th><th>Time</th><th>HTTP</th><th>ms</th><th>Result</th></tr></thead>
+    <tbody id="crawls-body"></tbody>
+  </table>
+</div>
+
+<script>
+  function fmt(ts) {
+    if (!ts) return "—";
+    return new Date(ts).toLocaleString();
+  }
+
+  function badge(cls, label) {
+    return `<span class="badge ${cls}">${label}</span>`;
+  }
+
+  async function load() {
+    try {
+      const res = await fetch("/data");
+      const d = await res.json();
+
+      // Totals
+      document.getElementById("t-total").textContent = d.totals.total;
+      document.getElementById("t-a2a").textContent = d.totals.a2a;
+      document.getElementById("t-mcp-live").textContent = d.totals.mcp_live;
+      document.getElementById("t-mcp-pkg").textContent = d.totals.mcp_package;
+      document.getElementById("t-seeds").textContent = d.seed_stats.total;
+      document.getElementById("t-pending").textContent = `${d.seed_stats.pending} pending`;
+
+      // By status
+      const sg = document.getElementById("status-grid");
+      sg.innerHTML = d.by_status.map(r =>
+        `<div class="status-card">
+          <span class="s-label">${r.status}</span>
+          <span class="s-count">${r.count}</span>
+        </div>`
+      ).join("") || "<p style='color:#555;font-size:13px'>No agents yet.</p>";
+
+      // Agents
+      const ab = document.getElementById("agents-body");
+      ab.innerHTML = d.recent_agents.map(a =>
+        `<tr>
+          <td>${a.name || "—"}</td>
+          <td>${badge(a.type, a.type)}</td>
+          <td>${badge(a.status, a.status)}</td>
+          <td><a href="${a.base_url}" target="_blank">${a.base_url || "—"}</a></td>
+          <td class="ts">${fmt(a.first_seen_at)}</td>
+        </tr>`
+      ).join("") || `<tr><td colspan="5" style="color:#555;text-align:center;padding:20px">No agents indexed yet.</td></tr>`;
+
+      // Crawl log
+      const cb = document.getElementById("crawls-body");
+      cb.innerHTML = d.recent_crawls.map(c =>
+        `<tr>
+          <td>${c.domain}</td>
+          <td class="ts">${fmt(c.checked_at)}</td>
+          <td>${c.http_status || "—"}</td>
+          <td>${c.response_time_ms != null ? c.response_time_ms : "—"}</td>
+          <td class="${c.success ? "ok" : "err"}">${c.success ? "FOUND" : (c.error_message || "MISS")}</td>
+        </tr>`
+      ).join("") || `<tr><td colspan="5" style="color:#555;text-align:center;padding:20px">No crawl history yet.</td></tr>`;
+
+    } catch (e) {
+      console.error(e);
+      alert("Could not load data. Is the server running?");
+    }
+  }
+
+  load();
+</script>
+
+</body>
+</html>
