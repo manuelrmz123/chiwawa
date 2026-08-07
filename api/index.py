@@ -29,7 +29,8 @@ app.add_middleware(
 
 
 def get_conn():
-    return psycopg2.connect(os.getenv("DATABASE_URL", "").strip())
+    url = os.getenv("DATABASE_URL", "").strip().lstrip('﻿￾')
+    return psycopg2.connect(url)
 
 
 def query(sql: str, params=None) -> list[dict]:
