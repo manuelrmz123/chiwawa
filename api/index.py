@@ -317,6 +317,24 @@ def submit_domain(request: Request, body: dict):
 import asyncio
 from fastapi.responses import StreamingResponse, Response as PlainResponse
 
+# Create mcp_calls table on first cold start (idempotent)
+try:
+    _mc = get_conn()
+    _mc.cursor().execute("""
+        CREATE TABLE IF NOT EXISTS mcp_calls (
+            id        BIGSERIAL PRIMARY KEY,
+            called_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            tool_name TEXT        NOT NULL,
+            success   BOOLEAN     NOT NULL DEFAULT TRUE
+        )
+    """)
+    _mc.cursor().execute("CREATE INDEX IF NOT EXISTS mcp_calls_called_at_idx ON mcp_calls (called_at DESC)")
+    _mc.cursor().execute("CREATE INDEX IF NOT EXISTS mcp_calls_tool_name_idx ON mcp_calls (tool_name)")
+    _mc.commit()
+    _mc.close()
+except Exception:
+    pass
+
 _MCP_TOOLS = [
     {
         "name": "get_stats",
@@ -372,6 +390,19 @@ _MCP_TOOLS = [
         },
     },
 ]
+
+
+def _log_mcp_call(tool_name: str, success: bool):
+    try:
+        conn = get_conn()
+        conn.cursor().execute(
+            "INSERT INTO mcp_calls (tool_name, success) VALUES (%s, %s)",
+            (tool_name, success),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 def _mcp_call_tool(name: str, args: dict) -> str:
@@ -465,11 +496,13 @@ def _mcp_handle(method: str, params: dict, req_id) -> dict | None:
         tool_name = params.get("name", "")
         try:
             result = _mcp_call_tool(tool_name, params.get("arguments", {}))
+            _log_mcp_call(tool_name, True)
             return {
                 "jsonrpc": "2.0", "id": req_id,
                 "result": {"content": [{"type": "text", "text": result}], "isError": False},
             }
         except Exception as e:
+            _log_mcp_call(tool_name, False)
             return {
                 "jsonrpc": "2.0", "id": req_id,
                 "result": {"content": [{"type": "text", "text": str(e)}], "isError": True},
