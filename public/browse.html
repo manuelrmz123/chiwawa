@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Registry — Chiwawa</title>
+  <link rel="icon" href="/chiwawa-logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/_vercel/insights/script.js"></script>
+  <style>
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    .muted { color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+    .badge {
+      display: inline-block; font-size: 10px; letter-spacing: 0.05em;
+      padding: 2px 7px; border: 1px solid var(--color-divider);
+      font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+    }
+    .badge-a2a   { border-color: #5980a6; color: #5980a6; }
+    .badge-mcp   { border-color: #7a9ab6; color: #416180; }
+    #loading { text-align: center; padding: 48px; color: color-mix(in srgb, var(--color-text) 50%, transparent); }
+    select.input { width: auto; }
+    @media (max-width: 600px) {
+      .filter-row { flex-direction: column; align-items: flex-start !important; }
+    }
+  </style>
+</head>
+<body>
+<div style="max-width:1280px; margin:0 auto; padding:0 32px 64px;">
+
+  <nav class="nav" style="border-bottom:1px solid var(--color-divider);margin-bottom:40px;">
+    <a href="/" class="nav-brand">
+      <img src="/chiwawa-logo.png" alt="" style="width:44px;height:44px;border-radius:50%;">
+      Chiwawa
+    </a>
+    <a href="/">Home</a>
+    <a href="/browse.html" class="active">Database</a>
+    <a href="/#api">API</a>
+    <a href="https://github.com/manuelrmz123/chiwawa" target="_blank" rel="noopener">GitHub</a>
+  </nav>
+
+  <div style="margin-bottom:24px;">
+    <h1 style="font-size:28px;margin-bottom:6px;">Registry</h1>
+    <p class="muted" style="font-size:14px;margin:0;">Every agent Chiwawa has found and last checked.</p>
+  </div>
+
+  <div class="filter-row" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;">
+    <input id="search" class="input" style="max-width:320px;" type="text" placeholder="Search name, URL, provider…">
+    <select id="page-size" class="input">
+      <option value="10">10 / page</option>
+      <option value="25" selected>25 / page</option>
+      <option value="50">50 / page</option>
+    </select>
+    <select id="type-filter" class="input">
+      <option value="">All types</option>
+      <option value="a2a">A2A</option>
+      <option value="mcp_live">MCP Live</option>
+      <option value="mcp_package">MCP Package</option>
+    </select>
+    <span id="result-summary" style="margin-left:auto;font-size:13px;" class="muted"></span>
+  </div>
+
+  <div style="overflow-x:auto;border:1px solid var(--color-divider);">
+    <table class="table" style="min-width:1000px;">
+      <thead>
+        <tr>
+          <th>Agent name</th>
+          <th>Type</th>
+          <th>URL / identifier</th>
+          <th>Provider</th>
+          <th>Version</th>
+          <th>First seen</th>
+          <th>Last seen</th>
+          <th style="text-align:right;">Fails</th>
+          <th>DNS</th>
+          <th>SSL</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="10" id="loading">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
+    <button id="btn-prev" class="btn btn-secondary" disabled>← Prev</button>
+    <span id="page-label" style="font-size:13px;" class="muted"></span>
+    <button id="btn-next" class="btn btn-secondary" disabled>Next →</button>
+  </div>
+
+</div>
+<script>
+  const API = '';
+  let state = { search: '', type: '', page: 1, limit: 25, total: 0, pages: 1 };
+  let debounceTimer;
+
+  function fmt(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function typeBadge(t) {
+    if (t === 'a2a')         return '<span class="badge badge-a2a">A2A</span>';
+    if (t === 'mcp_live')    return '<span class="badge badge-mcp">MCP Live</span>';
+    if (t === 'mcp_package') return '<span class="badge badge-mcp">MCP Pkg</span>';
+    return t || '—';
+  }
+
+  function yn(val) {
+    if (val === true  || val === 'Yes') return '✓';
+    if (val === false || val === 'No')  return '✗';
+    return '—';
+  }
+
+  async function load() {
+    const params = new URLSearchParams({
+      page: state.page,
+      limit: state.limit,
+    });
+    if (state.search) params.set('search', state.search);
+    if (state.type)   params.set('type', state.type);
+
+    const tbody = document.getElementById('tbody');
+    tbody.innerHTML = '<tr><td colspan="10" id="loading">Loading…</td></tr>';
+
+    try {
+      const res = await fetch(`${API}/agents?${params}`);
+      const d   = await res.json();
+
+      state.total = d.total;
+      state.pages = d.pages;
+
+      document.getElementById('result-summary').textContent =
+        `${d.total.toLocaleString()} agent${d.total !== 1 ? 's' : ''}`;
+      document.getElementById('page-label').textContent =
+        `Page ${d.page} of ${d.pages}`;
+      document.getElementById('btn-prev').disabled = d.page <= 1;
+      document.getElementById('btn-next').disabled = d.page >= d.pages;
+
+      if (!d.agents.length) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:32px;color:color-mix(in srgb,var(--color-text) 50%,transparent);">No agents found.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = d.agents.map(a => `
+        <tr>
+          <td style="font-weight:500;">${a.name || '—'}</td>
+          <td>${typeBadge(a.type)}</td>
+          <td class="mono muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${a.base_url || ''}">${a.base_url || '—'}</td>
+          <td>${a.provider_name || '—'}</td>
+          <td class="mono">${a.version || '—'}</td>
+          <td class="muted" style="font-size:12px;">${fmt(a.first_seen_at)}</td>
+          <td class="muted" style="font-size:12px;">${fmt(a.last_seen_at)}</td>
+          <td style="text-align:right;">${a.consecutive_fails ?? '—'}</td>
+          <td>${yn(a.dns_resolves)}</td>
+          <td>${yn(a.ssl_valid)}</td>
+        </tr>`).join('');
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:32px;color:#c0392b;">Error loading data. ${err.message}</td></tr>`;
+    }
+  }
+
+  document.getElementById('search').addEventListener('input', e => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      state.search = e.target.value.trim();
+      state.page = 1;
+      load();
+    }, 300);
+  });
+
+  document.getElementById('page-size').addEventListener('change', e => {
+    state.limit = Number(e.target.value);
+    state.page = 1;
+    load();
+  });
+
+  document.getElementById('type-filter').addEventListener('change', e => {
+    state.type = e.target.value;
+    state.page = 1;
+    load();
+  });
+
+  document.getElementById('btn-prev').addEventListener('click', () => {
+    if (state.page > 1) { state.page--; load(); }
+  });
+
+  document.getElementById('btn-next').addEventListener('click', () => {
+    if (state.page < state.pages) { state.page++; load(); }
+  });
+
+  load();
+</script>
+</body>
+</html>

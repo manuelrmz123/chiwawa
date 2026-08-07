@@ -4,408 +4,164 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Chiwawa — AI Agent Registry</title>
+  <link rel="icon" href="/chiwawa-logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="/style.css">
   <script defer src="/_vercel/insights/script.js"></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
-    a { color: #38bdf8; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-
-    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
-
-    /* Header */
-    header { border-bottom: 1px solid #1a1a1a; padding: 16px 0; position: sticky; top: 0; background: #0f0f0f; z-index: 10; }
-    .header-inner { display: flex; align-items: center; justify-content: space-between; }
-    .logo { font-size: 18px; font-weight: 700; color: #fff; letter-spacing: -0.3px; cursor: pointer; }
-    .logo span { color: #38bdf8; }
-    nav { display: flex; gap: 24px; font-size: 14px; }
-    nav a { color: #666; }
-    nav a:hover { color: #e0e0e0; text-decoration: none; }
-
-    /* Hero */
-    .hero { padding: 80px 0 52px; }
-    .hero h1 { font-size: 44px; font-weight: 700; color: #fff; letter-spacing: -0.5px; line-height: 1.15; margin-bottom: 18px; }
-    .hero p { font-size: 17px; color: #666; max-width: 500px; line-height: 1.65; margin-bottom: 32px; }
-    .hero-actions { display: flex; gap: 12px; }
-    .btn { display: inline-block; padding: 10px 22px; border-radius: 7px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; transition: background 0.15s; }
-    .btn-primary { background: #38bdf8; color: #000; }
-    .btn-primary:hover { background: #7dd3fc; text-decoration: none; color: #000; }
-    .btn-ghost { background: #1a1a1a; color: #ccc; border: 1px solid #2a2a2a; }
-    .btn-ghost:hover { background: #222; text-decoration: none; color: #ccc; }
-
-    /* Stats */
-    .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 56px; }
-    .stat-card { background: #141414; border: 1px solid #1e1e1e; border-radius: 8px; padding: 18px 20px; }
-    .stat-card .lbl { font-size: 11px; color: #444; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
-    .stat-card .val { font-size: 28px; font-weight: 700; color: #fff; }
-
-    /* Section */
-    .section { margin-bottom: 56px; }
-    .section-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-    .section-title { font-size: 12px; font-weight: 600; color: #444; text-transform: uppercase; letter-spacing: 0.08em; }
-
-    /* Recent agent cards */
-    .agent-cards { display: flex; flex-direction: column; gap: 8px; }
-    .agent-card { background: #141414; border: 1px solid #1e1e1e; border-radius: 8px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: border-color 0.12s; }
-    .agent-card:hover { border-color: #2a2a2a; }
-    .ac-left { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-    .ac-name { font-size: 14px; font-weight: 500; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .ac-desc { font-size: 12px; color: #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 500px; }
-    .ac-right { display: flex; gap: 6px; align-items: center; flex-shrink: 0; margin-left: 16px; }
-
-    /* Badges */
-    .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
-    .badge.a2a         { background: #0a1e2e; color: #38bdf8; }
-    .badge.mcp_live    { background: #1a0a2e; color: #a78bfa; }
-    .badge.mcp_package { background: #1a1a2e; color: #818cf8; }
-    .badge.active      { background: #0a2e1a; color: #4ade80; }
-    .badge.degraded    { background: #2e1f0a; color: #fb923c; }
-    .badge.unresponsive{ background: #2a1a1a; color: #f87171; }
-    .badge.unreachable { background: #2a1a1a; color: #f87171; }
-    .badge.gone        { background: #1a1a2a; color: #818cf8; }
-    .badge.archived    { background: #1a1a1a; color: #444; }
-
-    /* Browse */
-    .browse-top { padding-top: 48px; margin-bottom: 28px; }
-    .browse-top h1 { font-size: 26px; font-weight: 700; color: #fff; margin-bottom: 20px; }
-    .filters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
-    .search-box { flex: 1; min-width: 200px; background: #141414; border: 1px solid #1e1e1e; color: #e0e0e0; font-size: 14px; padding: 9px 14px; border-radius: 7px; outline: none; }
-    .search-box:focus { border-color: #38bdf8; }
-    .search-box::placeholder { color: #333; }
-    select.flt { background: #141414; border: 1px solid #1e1e1e; color: #999; font-size: 13px; padding: 9px 12px; border-radius: 7px; outline: none; }
-    .result-count { font-size: 13px; color: #444; margin-bottom: 12px; }
-
-    /* Table */
-    .tbl-wrap { overflow-x: auto; border: 1px solid #1a1a1a; border-radius: 8px; }
-    table { width: 100%; border-collapse: collapse; }
-    th { text-align: left; font-size: 11px; font-weight: 600; color: #333; text-transform: uppercase; letter-spacing: 0.08em; padding: 10px 14px; border-bottom: 1px solid #1a1a1a; }
-    td { font-size: 13px; padding: 11px 14px; border-bottom: 1px solid #141414; vertical-align: middle; }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: #121212; }
-    .name-cell { color: #ddd; font-weight: 500; cursor: pointer; }
-    .name-cell:hover { color: #38bdf8; }
-    .desc-cell { color: #444; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .ts { color: #333; font-size: 12px; }
-
-    /* Pagination */
-    .pager { display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 13px; color: #444; }
-    .pager button { background: #141414; border: 1px solid #1e1e1e; color: #888; font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer; }
-    .pager button:hover:not(:disabled) { background: #1a1a1a; }
-    .pager button:disabled { opacity: 0.3; cursor: default; }
-
-    /* Detail */
-    .detail-wrap { padding-top: 48px; }
-    .back-link { font-size: 13px; color: #444; cursor: pointer; display: inline-block; margin-bottom: 28px; }
-    .back-link:hover { color: #888; }
-    .detail-name { font-size: 30px; font-weight: 700; color: #fff; margin-bottom: 10px; }
-    .detail-badges { display: flex; gap: 8px; margin-bottom: 12px; }
-    .detail-url { font-size: 13px; margin-bottom: 28px; }
-    .detail-desc { font-size: 15px; color: #666; line-height: 1.65; max-width: 620px; margin-bottom: 32px; }
-    .detail-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    @media (max-width: 680px) { .detail-cols { grid-template-columns: 1fr; } }
-    .box { background: #141414; border: 1px solid #1e1e1e; border-radius: 8px; padding: 18px; margin-bottom: 16px; }
-    .box h3 { font-size: 11px; font-weight: 600; color: #444; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 14px; }
-    .kv-row { display: flex; justify-content: space-between; font-size: 13px; padding: 7px 0; border-bottom: 1px solid #161616; }
-    .kv-row:last-child { border-bottom: none; }
-    .kv-k { color: #444; }
-    .kv-v { color: #ccc; text-align: right; max-width: 58%; word-break: break-all; }
-    .skill-item { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid #1a1a1a; }
-    .skill-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
-    .skill-name { font-size: 13px; font-weight: 600; color: #e0e0e0; margin-bottom: 3px; }
-    .skill-desc { font-size: 12px; color: #444; }
-    .ok  { color: #4ade80; }
-    .err { color: #f87171; }
-
-    /* States */
-    .view { display: none; }
-    .view.active { display: block; }
-    .loading { text-align: center; padding: 60px 0; color: #333; font-size: 14px; }
-    .empty-state { text-align: center; padding: 60px 0; color: #333; font-size: 14px; }
-
-    /* Footer */
-    footer { border-top: 1px solid #1a1a1a; margin-top: 80px; padding: 24px 0; }
-    .footer-inner { display: flex; justify-content: space-between; font-size: 12px; color: #333; }
+    .stat-value { font-family: var(--font-heading); font-size: 34px; }
+    .stat-label {
+      font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: color-mix(in srgb, var(--color-text) 55%, transparent); margin-bottom: 8px;
+    }
+    pre {
+      background: var(--color-surface); border: 1px solid var(--color-divider);
+      padding: 16px 76px 16px 16px;
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: 13px; overflow-x: auto; margin: 0;
+    }
+    .copy-wrap { position: relative; }
+    .copy-btn { position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 4px 8px; }
+    @media (max-width: 700px) {
+      .hero-grid  { grid-template-columns: 1fr !important; }
+      .stats-grid { grid-template-columns: repeat(2,1fr) !important; }
+      .api-grid   { grid-template-columns: 1fr !important; }
+      .footer-grid { grid-template-columns: 1fr !important; }
+      .hero-image { display: none; }
+    }
   </style>
 </head>
 <body>
+<div style="max-width:1160px; margin:0 auto; padding:0 32px;">
 
-<header>
-  <div class="container">
-    <div class="header-inner">
-      <div class="logo" onclick="location.hash='#/'">Chiwawa<span>.</span></div>
-      <nav>
-        <a href="#/">Home</a>
-        <a href="#/agents">Browse</a>
-        <a href="/docs" target="_blank">API</a>
-        <a href="https://github.com/manuelrmz123/chiwawa" target="_blank">GitHub</a>
-      </nav>
-    </div>
-  </div>
-</header>
+  <nav class="nav" style="border-bottom:1px solid var(--color-divider);">
+    <a href="/" class="nav-brand">
+      <img src="/chiwawa-logo.png" alt="" style="width:44px;height:44px;border-radius:50%;">
+      Chiwawa
+    </a>
+    <a href="/" class="active">Home</a>
+    <a href="/browse.html">Database</a>
+    <a href="#api">API</a>
+    <a href="https://github.com/manuelrmz123/chiwawa" target="_blank" rel="noopener">GitHub</a>
+  </nav>
 
-<main class="container">
-
-  <!-- ── HOME ── -->
-  <div id="view-home" class="view">
-    <div class="hero">
-      <h1>The public registry<br>of AI agents.</h1>
-      <p>Chiwawa automatically discovers, indexes, and tracks AI agents across A2A and MCP protocols — no manual registration required.</p>
-      <div class="hero-actions">
-        <a href="#/agents" class="btn btn-primary">Browse agents</a>
-        <a href="/docs" target="_blank" class="btn btn-ghost">API docs</a>
+  <!-- Hero -->
+  <section class="hero-grid" style="display:grid;grid-template-columns:1.1fr 0.9fr;gap:56px;align-items:center;padding:72px 0 64px;">
+    <div>
+      <span class="tag tag-outline" style="margin-bottom:20px;display:inline-flex;">Live agent registry</span>
+      <h1 style="font-size:56px;max-width:480px;margin-bottom:20px;">Every agent, findable.</h1>
+      <p style="font-size:17px;max-width:440px;margin-bottom:32px;color:color-mix(in srgb,var(--color-text) 70%,transparent);">
+        Chiwawa crawls the web for A2A and MCP agents, checks that they still answer, and keeps a public record of who's alive.
+      </p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <a href="/browse.html" class="btn btn-primary">Browse the registry</a>
+        <a href="#api" class="btn btn-secondary">API + MCP</a>
       </div>
     </div>
-
-    <div class="stats-row">
-      <div class="stat-card"><div class="lbl">Total Agents</div><div class="val" id="s-total">—</div></div>
-      <div class="stat-card"><div class="lbl">A2A</div><div class="val" id="s-a2a">—</div></div>
-      <div class="stat-card"><div class="lbl">MCP Live</div><div class="val" id="s-live">—</div></div>
-      <div class="stat-card"><div class="lbl">MCP Package</div><div class="val" id="s-pkg">—</div></div>
-      <div class="stat-card"><div class="lbl">Active</div><div class="val" id="s-active">—</div></div>
+    <div class="blueprint hero-image" style="aspect-ratio:4/5;">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <img src="/chihuahua-hero.png" alt="Chihuahua mascot" style="width:100%;height:100%;object-fit:contain;background:var(--color-bg);">
     </div>
+  </section>
 
-    <div class="section">
-      <div class="section-hdr">
-        <span class="section-title">Recently added</span>
-        <a href="#/agents" style="font-size:13px;color:#444">View all →</a>
+  <!-- Live stats -->
+  <section style="padding-bottom:72px;">
+    <div class="blueprint stats-grid" style="display:grid;grid-template-columns:repeat(4,1fr);">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div style="padding:24px 20px;border-right:1px solid var(--color-divider);">
+        <div class="stat-label">Agents indexed</div>
+        <div class="stat-value" id="stat-total">—</div>
       </div>
-      <div class="agent-cards" id="recent-list"><div class="loading">Loading…</div></div>
-    </div>
-  </div>
-
-  <!-- ── BROWSE ── -->
-  <div id="view-agents" class="view">
-    <div class="browse-top">
-      <h1>Browse Agents</h1>
-      <div class="filters">
-        <input class="search-box" id="search-input" type="text" placeholder="Search by name or description…" oninput="onSearch()">
-        <select class="flt" id="flt-type" onchange="browseGoPage(1)">
-          <option value="">All types</option>
-          <option value="a2a">A2A</option>
-          <option value="mcp_live">MCP Live</option>
-          <option value="mcp_package">MCP Package</option>
-        </select>
-        <select class="flt" id="flt-status" onchange="browseGoPage(1)">
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
-          <option value="degraded">Degraded</option>
-          <option value="unresponsive">Unresponsive</option>
-          <option value="unreachable">Unreachable</option>
-          <option value="gone">Gone</option>
-          <option value="archived">Archived</option>
-        </select>
-        <select class="flt" id="flt-limit" onchange="browseGoPage(1)">
-          <option value="25">25 / page</option>
-          <option value="50" selected>50 / page</option>
-          <option value="100">100 / page</option>
-        </select>
+      <div style="padding:24px 20px;border-right:1px solid var(--color-divider);">
+        <div class="stat-label">Protocols</div>
+        <div class="stat-value">A2A · MCP</div>
       </div>
-      <div class="result-count" id="browse-count"></div>
-      <div class="tbl-wrap">
-        <table>
-          <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Description</th><th>First Seen</th></tr></thead>
-          <tbody id="browse-tbody"><tr><td colspan="5" class="loading">Loading…</td></tr></tbody>
-        </table>
+      <div style="padding:24px 20px;border-right:1px solid var(--color-divider);">
+        <div class="stat-label">Recrawled every</div>
+        <div class="stat-value">6 hrs</div>
       </div>
-      <div class="pager">
-        <button id="btn-prev" onclick="browseGoPage(browsePage-1)">← Prev</button>
-        <span id="browse-pager-info" style="font-size:13px;color:#444"></span>
-        <button id="btn-next" onclick="browseGoPage(browsePage+1)">Next →</button>
+      <div style="padding:24px 20px;">
+        <div class="stat-label">Manual signup</div>
+        <div class="stat-value">None</div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- ── AGENT DETAIL ── -->
-  <div id="view-agent" class="view">
-    <div class="detail-wrap">
-      <span class="back-link" onclick="history.back()">← Back</span>
-      <div id="detail-content"><div class="loading">Loading…</div></div>
+  <!-- API + MCP -->
+  <section id="api" style="padding-bottom:80px;scroll-margin-top:24px;">
+    <h2 style="font-size:13px;letter-spacing:0.08em;text-transform:uppercase;color:color-mix(in srgb,var(--color-text) 55%,transparent);margin-bottom:28px;font-family:var(--font-body);font-weight:500;">API + MCP access</h2>
+    <div class="api-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+
+      <div class="blueprint" style="padding:24px;">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <div class="card-kicker" style="margin-bottom:10px;">REST</div>
+        <h3 style="margin-bottom:14px;">Call it directly</h3>
+        <div class="copy-wrap">
+          <pre id="rest-snippet">curl https://chiwawa.vercel.app/agents?limit=3</pre>
+          <button class="btn btn-ghost copy-btn" data-target="rest-snippet">Copy</button>
+        </div>
+      </div>
+
+      <div class="blueprint" style="padding:24px;">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <div class="card-kicker" style="margin-bottom:10px;">MCP</div>
+        <h3 style="margin-bottom:14px;">Or plug it into an agent</h3>
+        <div class="copy-wrap">
+          <pre id="mcp-snippet">{
+  "mcpServers": {
+    "chiwawa": {
+      "url": "https://chiwawa.vercel.app/mcp/sse"
+    }
+  }
+}</pre>
+          <button class="btn btn-ghost copy-btn" data-target="mcp-snippet">Copy</button>
+        </div>
+      </div>
+
     </div>
-  </div>
+  </section>
 
-</main>
-
-<footer>
-  <div class="container">
-    <div class="footer-inner">
-      <span>Chiwawa — AI Agent Registry</span>
-      <span>Updates every 6h · <a href="/docs" style="color:#333">API</a> · <a href="/.well-known/agent.json" style="color:#333">Agent Card</a></span>
+  <!-- Bottom callout -->
+  <section class="footer-grid" style="display:grid;grid-template-columns:220px 1fr;gap:32px;align-items:center;margin-bottom:80px;">
+    <div class="blueprint" style="aspect-ratio:1;">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <img src="/chiwawa-logo.png" alt="" style="width:100%;height:100%;object-fit:contain;padding:32px;">
     </div>
-  </div>
-</footer>
+    <div>
+      <h3 style="margin-bottom:10px;">Chiwawa doesn't sleep.</h3>
+      <p style="color:color-mix(in srgb,var(--color-text) 65%,transparent);max-width:480px;margin-bottom:0;">
+        It keeps crawling, keeps checking, and keeps the registry current — no dashboard to babysit.
+      </p>
+    </div>
+  </section>
 
+  <footer style="border-top:1px solid var(--color-divider);padding:24px 0 48px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:color-mix(in srgb,var(--color-text) 55%,transparent);">
+    <span>Chiwawa — public agent registry</span>
+    <div style="display:flex;gap:20px;">
+      <a href="/browse.html">Database</a>
+      <a href="https://github.com/manuelrmz123/chiwawa" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/manuelrmz123/chiwawa/blob/main/docs/.well-known/agent.json" target="_blank" rel="noopener">Agent card</a>
+    </div>
+  </footer>
+
+</div>
 <script>
-const API = '';
+  fetch('/stats').then(r => r.json()).then(d => {
+    const el = document.getElementById('stat-total');
+    if (el) el.textContent = d.totals.total.toLocaleString();
+  }).catch(() => {});
 
-// ── Router ─────────────────────────────────────────────────────────────────
-function route() {
-  const hash = location.hash || '#/';
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  if (hash === '#/' || hash === '') {
-    show('view-home'); loadHome();
-  } else if (hash === '#/agents') {
-    show('view-agents'); browseGoPage(1);
-  } else if (hash.startsWith('#/agents/')) {
-    show('view-agent'); loadAgent(hash.replace('#/agents/', ''));
-  }
-  window.scrollTo(0, 0);
-}
-window.addEventListener('hashchange', route);
-window.addEventListener('load', route);
-function show(id) { document.getElementById(id).classList.add('active'); }
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-const fmtDate = ts => ts ? new Date(ts).toLocaleDateString('en-US', {year:'numeric',month:'short',day:'numeric'}) : '—';
-const fmtTs   = ts => ts ? new Date(ts).toLocaleString() : '—';
-const badge   = (cls, lbl) => `<span class="badge ${cls}">${lbl}</span>`;
-const kv      = (k, v) => `<div class="kv-row"><span class="kv-k">${k}</span><span class="kv-v">${v ?? '—'}</span></div>`;
-
-// ── Home ───────────────────────────────────────────────────────────────────
-async function loadHome() {
-  try {
-    const d = await fetch(`${API}/stats`).then(r => r.json());
-    document.getElementById('s-total').textContent  = d.totals.total.toLocaleString();
-    document.getElementById('s-a2a').textContent    = d.totals.a2a.toLocaleString();
-    document.getElementById('s-live').textContent   = d.totals.mcp_live.toLocaleString();
-    document.getElementById('s-pkg').textContent    = d.totals.mcp_package.toLocaleString();
-    const act = d.by_status.find(s => s.status === 'active');
-    document.getElementById('s-active').textContent = act ? act.count.toLocaleString() : '0';
-
-    const el = document.getElementById('recent-list');
-    el.innerHTML = d.recent_agents.length
-      ? d.recent_agents.map(a => `
-          <div class="agent-card" onclick="location.hash='#/agents/${a.id}'">
-            <div class="ac-left">
-              <span class="ac-name">${a.name || '—'}</span>
-              <span class="ac-desc">${a.description || ''}</span>
-            </div>
-            <div class="ac-right">
-              ${badge(a.type, a.type.replace(/_/g,' '))}
-              ${badge(a.status, a.status)}
-            </div>
-          </div>`).join('')
-      : '<div class="empty-state">No agents yet.</div>';
-  } catch(e) { console.error(e); }
-}
-
-// ── Browse ─────────────────────────────────────────────────────────────────
-let browsePage = 1;
-let searchTimer;
-function onSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(() => browseGoPage(1), 380); }
-
-async function browseGoPage(page) {
-  browsePage = page;
-  const search = document.getElementById('search-input')?.value || '';
-  const type   = document.getElementById('flt-type')?.value   || '';
-  const status = document.getElementById('flt-status')?.value || '';
-  const limit  = document.getElementById('flt-limit')?.value  || '50';
-
-  const p = new URLSearchParams({ page: browsePage, limit });
-  if (search) p.set('search', search);
-  if (type)   p.set('type', type);
-  if (status) p.set('status', status);
-
-  const tbody = document.getElementById('browse-tbody');
-  tbody.innerHTML = '<tr><td colspan="5" class="loading">Loading…</td></tr>';
-
-  try {
-    const d = await fetch(`${API}/agents?${p}`).then(r => r.json());
-    document.getElementById('browse-count').textContent    = `${d.total.toLocaleString()} agents found`;
-    document.getElementById('browse-pager-info').textContent = `Page ${browsePage} of ${d.pages}`;
-    document.getElementById('btn-prev').disabled = browsePage <= 1;
-    document.getElementById('btn-next').disabled = browsePage >= d.pages;
-
-    tbody.innerHTML = d.agents.length
-      ? d.agents.map(a => `<tr>
-          <td><span class="name-cell" onclick="location.hash='#/agents/${a.id}'">${a.name || '—'}</span></td>
-          <td>${badge(a.type, a.type.replace(/_/g,' '))}</td>
-          <td>${badge(a.status, a.status)}</td>
-          <td class="desc-cell">${a.description || '—'}</td>
-          <td class="ts">${fmtDate(a.first_seen_at)}</td>
-        </tr>`).join('')
-      : '<tr><td colspan="5" class="empty-state">No agents found.</td></tr>';
-  } catch(e) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Error loading agents.</td></tr>';
-  }
-}
-
-// ── Agent Detail ───────────────────────────────────────────────────────────
-async function loadAgent(id) {
-  const el = document.getElementById('detail-content');
-  el.innerHTML = '<div class="loading">Loading…</div>';
-  try {
-    const [agent, crawls] = await Promise.all([
-      fetch(`${API}/agents/${id}`).then(r => r.json()),
-      fetch(`${API}/agents/${id}/crawl_log`).then(r => r.json()),
-    ]);
-
-    if (agent.detail) { el.innerHTML = '<div class="empty-state">Agent not found.</div>'; return; }
-
-    const skillsHtml = agent.skills?.length ? `
-      <div class="box">
-        <h3>Skills</h3>
-        ${agent.skills.map(s => `
-          <div class="skill-item">
-            <div class="skill-name">${s.name || s.skill_id || '—'}</div>
-            <div class="skill-desc">${s.description || ''}</div>
-          </div>`).join('')}
-      </div>` : '';
-
-    const authHtml = agent.auth_schemes?.length ? `
-      <div class="box">
-        <h3>Authentication</h3>
-        <div style="font-size:13px;color:#ccc">${agent.auth_schemes.join(', ')}</div>
-      </div>` : '';
-
-    const crawlHtml = crawls.length
-      ? crawls.map(c => `<tr>
-          <td class="ts">${fmtTs(c.checked_at)}</td>
-          <td>${c.http_status || '—'}</td>
-          <td>${c.response_time_ms != null ? c.response_time_ms+'ms' : '—'}</td>
-          <td class="${c.success ? 'ok' : 'err'}">${c.success ? '✓' : (c.error_message || '✗')}</td>
-        </tr>`).join('')
-      : '<tr><td colspan="4" class="empty-state" style="padding:20px">No history.</td></tr>';
-
-    el.innerHTML = `
-      <div class="detail-name">${agent.name || 'Unknown Agent'}</div>
-      <div class="detail-badges">
-        ${badge(agent.type, agent.type.replace(/_/g,' '))}
-        ${badge(agent.status, agent.status)}
-      </div>
-      ${agent.base_url ? `<div class="detail-url"><a href="${agent.base_url}" target="_blank">${agent.base_url}</a></div>` : ''}
-      ${agent.description ? `<div class="detail-desc">${agent.description}</div>` : ''}
-
-      <div class="detail-cols">
-        <div>
-          <div class="box">
-            <h3>Details</h3>
-            ${kv('Provider', agent.provider_name)}
-            ${kv('Version', agent.version)}
-            ${kv('First seen', fmtDate(agent.first_seen_at))}
-            ${kv('Last seen', fmtDate(agent.last_seen_at))}
-            ${kv('Consecutive fails', agent.consecutive_fails)}
-            ${kv('DNS resolves', agent.dns_resolves === false ? '<span class="err">No</span>' : '<span class="ok">Yes</span>')}
-            ${kv('SSL valid', agent.ssl_valid === false ? '<span class="err">No</span>' : '<span class="ok">Yes</span>')}
-          </div>
-          ${authHtml}
-          ${skillsHtml}
-        </div>
-        <div>
-          <div class="box">
-            <h3>Crawl History</h3>
-            <div class="tbl-wrap">
-              <table>
-                <thead><tr><th>Time</th><th>HTTP</th><th>Speed</th><th>Result</th></tr></thead>
-                <tbody>${crawlHtml}</tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>`;
-  } catch(e) {
-    el.innerHTML = '<div class="empty-state">Error loading agent.</div>';
-  }
-}
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-target]');
+    if (!btn) return;
+    const pre = document.getElementById(btn.dataset.target);
+    if (!pre) return;
+    navigator.clipboard?.writeText(pre.textContent).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => btn.textContent = orig, 1400);
+    });
+  });
 </script>
 </body>
 </html>
