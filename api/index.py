@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import re
@@ -11,11 +10,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.applications import Starlette
-from starlette.requests import Request as StarletteRequest
-from starlette.responses import Response as StarletteResponse
-from starlette.routing import Route
-
 load_dotenv()
 
 app = FastAPI(
@@ -316,206 +310,131 @@ def submit_domain(request: Request, body: dict):
 # ---------------------------------------------------------------------------
 # MCP Server — Phase 7
 # Agents and Claude can query Chiwawa natively via the MCP protocol.
-# SSE endpoint:  GET  /mcp/sse
-# Message POST:  POST /mcp/messages/
+# SSE endpoint: GET /mcp/sse  |  Messages: POST /mcp/messages/
 # ---------------------------------------------------------------------------
 
-from mcp.server import Server as McpServer
-from mcp.server.sse import SseServerTransport
-from mcp.server.models import InitializationOptions
-from mcp import types as mcp_types
+from mcp.server.fastmcp import FastMCP
 
-_mcp = McpServer("chiwawa-registry")
-_sse = SseServerTransport("/mcp/messages/")
-
-
-@_mcp.list_tools()
-async def _list_tools() -> list[mcp_types.Tool]:
-    return [
-        mcp_types.Tool(
-            name="get_stats",
-            description=(
-                "Returns aggregate statistics for the Chiwawa AI agent registry: "
-                "total agents indexed, breakdown by type (A2A, MCP Live, MCP Package), "
-                "and breakdown by health status (active, degraded, unresponsive, etc.)."
-            ),
-            inputSchema={"type": "object", "properties": {}, "required": []},
-        ),
-        mcp_types.Tool(
-            name="search_agents",
-            description=(
-                "Search for AI agents in the Chiwawa registry. "
-                "Supports full-text search on name and description, "
-                "filtering by type and health status, and a configurable result limit."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Full-text search on agent name and description (case-insensitive)",
-                    },
-                    "type": {
-                        "type": "string",
-                        "enum": ["a2a", "mcp_live", "mcp_package"],
-                        "description": "Filter by agent type",
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["active", "degraded", "unresponsive", "unreachable", "gone", "archived"],
-                        "description": "Filter by health status",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Number of results to return (1–20, default 10)",
-                        "default": 10,
-                        "minimum": 1,
-                        "maximum": 20,
-                    },
-                },
-                "required": [],
-            },
-        ),
-        mcp_types.Tool(
-            name="get_agent",
-            description=(
-                "Get full details for a specific agent by its UUID. "
-                "Returns provider, version, skills, authentication schemes, "
-                "and the last 5 crawl results."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "The UUID of the agent (from search_agents results)",
-                    },
-                },
-                "required": ["agent_id"],
-            },
-        ),
-        mcp_types.Tool(
-            name="submit_domain",
-            description=(
-                "Submit a domain to the Chiwawa crawler queue. "
-                "The crawler will check for an A2A agent card at /.well-known/agent.json. "
-                "Use this to register a new agent with the registry."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "domain": {
-                        "type": "string",
-                        "description": "Domain to crawl, e.g. 'example.com' (no https://, no trailing slash)",
-                    },
-                },
-                "required": ["domain"],
-            },
-        ),
-    ]
+_mcp = FastMCP(
+    "chiwawa-registry",
+    instructions=(
+        "Chiwawa is a public registry of AI agents discovered automatically "
+        "across A2A and MCP protocols. Use get_stats for an overview, "
+        "search_agents to find agents, and get_agent for full details."
+    ),
+)
 
 
-@_mcp.call_tool()
-async def _call_tool(name: str, arguments: dict) -> list[mcp_types.TextContent]:
-    def _ok(data) -> list[mcp_types.TextContent]:
-        return [mcp_types.TextContent(type="text", text=json.dumps(data, default=str, indent=2))]
-
-    if name == "get_stats":
-        totals    = await asyncio.to_thread(query, """
-            SELECT COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE type = 'a2a')         AS a2a,
-                   COUNT(*) FILTER (WHERE type = 'mcp_live')    AS mcp_live,
-                   COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
-            FROM agents
-        """)
-        by_status = await asyncio.to_thread(query,
-            "SELECT status, COUNT(*) AS count FROM agents GROUP BY status ORDER BY count DESC")
-        return _ok({"totals": totals[0], "by_status": by_status})
-
-    elif name == "search_agents":
-        q      = arguments.get("query", "")
-        atype  = arguments.get("type", "")
-        status = arguments.get("status", "")
-        limit  = min(int(arguments.get("limit", 10)), 20)
-        conds, params = [], []
-        if atype:  conds.append("type = %s");   params.append(atype)
-        if status: conds.append("status = %s"); params.append(status)
-        if q:
-            conds.append("(name ILIKE %s OR description ILIKE %s)")
-            params += [f"%{q}%", f"%{q}%"]
-        where  = ("WHERE " + " AND ".join(conds)) if conds else ""
-        agents = await asyncio.to_thread(query, f"""
-            SELECT id::text, name, type, status, base_url, description,
-                   first_seen_at AT TIME ZONE 'UTC' AS first_seen_at
-            FROM agents {where} ORDER BY first_seen_at DESC LIMIT %s
-        """, params + [limit])
-        return _ok({"count": len(agents), "agents": agents})
-
-    elif name == "get_agent":
-        aid  = arguments.get("agent_id", "")
-        rows = await asyncio.to_thread(query, """
-            SELECT id::text, type, name, description, base_url, provider_name, version,
-                   status, consecutive_fails, dns_resolves, ssl_valid,
-                   first_seen_at AT TIME ZONE 'UTC' AS first_seen_at,
-                   last_seen_at  AT TIME ZONE 'UTC' AS last_seen_at
-            FROM agents WHERE id = %s::uuid
-        """, [aid])
-        if not rows:
-            return _ok({"error": "Agent not found"})
-        agent = rows[0]
-        agent["skills"] = await asyncio.to_thread(query,
-            "SELECT skill_id, name, description FROM agent_skills WHERE agent_id = %s::uuid", [aid])
-        agent["auth_schemes"] = [r["scheme"] for r in await asyncio.to_thread(query,
-            "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [aid])]
-        agent["recent_crawls"] = await asyncio.to_thread(query, """
-            SELECT checked_at AT TIME ZONE 'UTC' AS checked_at,
-                   http_status, response_time_ms, success, error_message
-            FROM crawl_log WHERE agent_id = %s::uuid ORDER BY checked_at DESC LIMIT 5
-        """, [aid])
-        return _ok(agent)
-
-    elif name == "submit_domain":
-        domain = arguments.get("domain", "").strip().lower()
-        if not domain or not DOMAIN_RE.match(domain):
-            return _ok({"error": "Invalid domain name"})
-        try:
-            conn = get_conn()
-            cur  = conn.cursor()
-            cur.execute(
-                "INSERT INTO seed_domains (domain, source, status) VALUES (%s, 'mcp_submission', 'pending') ON CONFLICT (domain) DO NOTHING",
-                (domain,)
-            )
-            inserted = cur.rowcount > 0
-            conn.commit()
-            conn.close()
-            return _ok({"domain": domain, "queued": inserted,
-                        "message": "Added to crawl queue." if inserted else "Domain already known."})
-        except Exception as e:
-            return _ok({"error": str(e)})
-
-    return _ok({"error": f"Unknown tool: {name}"})
+@_mcp.tool()
+def get_stats() -> str:
+    """
+    Returns aggregate statistics for the Chiwawa AI agent registry:
+    total agents indexed, breakdown by type (A2A, MCP Live, MCP Package),
+    and breakdown by health status (active, degraded, unresponsive, etc.).
+    """
+    totals = query("""
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE type = 'a2a')         AS a2a,
+               COUNT(*) FILTER (WHERE type = 'mcp_live')    AS mcp_live,
+               COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
+        FROM agents
+    """)[0]
+    by_status = query(
+        "SELECT status, COUNT(*) AS count FROM agents GROUP BY status ORDER BY count DESC"
+    )
+    return json.dumps({"totals": totals, "by_status": by_status}, default=str)
 
 
-async def _sse_endpoint(request: StarletteRequest) -> StarletteResponse:
-    async with _sse.connect_sse(request.scope, request.receive, request._send) as streams:
-        await _mcp.run(
-            streams[0],
-            streams[1],
-            InitializationOptions(
-                server_name="chiwawa-registry",
-                server_version="0.1.0",
-                capabilities=_mcp.get_capabilities(notification_options=None, experimental_capabilities={}),
-            ),
+@_mcp.tool()
+def search_agents(q: str = "", agent_type: str = "", status: str = "", limit: int = 10) -> str:
+    """
+    Search for AI agents in the Chiwawa registry.
+
+    Args:
+        q: Full-text search on name and description (case-insensitive).
+        agent_type: Filter by type — one of: a2a, mcp_live, mcp_package.
+        status: Filter by health status — one of: active, degraded, unresponsive, unreachable, gone, archived.
+        limit: Number of results to return (1–20, default 10).
+    """
+    limit = min(int(limit), 20)
+    conds, params = [], []
+    if agent_type: conds.append("type = %s");   params.append(agent_type)
+    if status:     conds.append("status = %s"); params.append(status)
+    if q:
+        conds.append("(name ILIKE %s OR description ILIKE %s)")
+        params += [f"%{q}%", f"%{q}%"]
+    where  = ("WHERE " + " AND ".join(conds)) if conds else ""
+    agents = query(f"""
+        SELECT id::text, name, type, status, base_url, description,
+               first_seen_at AT TIME ZONE 'UTC' AS first_seen_at
+        FROM agents {where} ORDER BY first_seen_at DESC LIMIT %s
+    """, params + [limit])
+    return json.dumps({"count": len(agents), "agents": agents}, default=str)
+
+
+@_mcp.tool()
+def get_agent(agent_id: str) -> str:
+    """
+    Get full details for a specific agent by its UUID.
+    Returns provider, version, skills, auth schemes, and last 5 crawl results.
+
+    Args:
+        agent_id: The UUID of the agent (obtain IDs from search_agents results).
+    """
+    rows = query("""
+        SELECT id::text, type, name, description, base_url, provider_name, version,
+               status, consecutive_fails, dns_resolves, ssl_valid,
+               first_seen_at AT TIME ZONE 'UTC' AS first_seen_at,
+               last_seen_at  AT TIME ZONE 'UTC' AS last_seen_at
+        FROM agents WHERE id = %s::uuid
+    """, [agent_id])
+    if not rows:
+        return json.dumps({"error": "Agent not found"})
+    agent = rows[0]
+    agent["skills"] = query(
+        "SELECT skill_id, name, description FROM agent_skills WHERE agent_id = %s::uuid",
+        [agent_id],
+    )
+    agent["auth_schemes"] = [r["scheme"] for r in query(
+        "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [agent_id]
+    )]
+    agent["recent_crawls"] = query("""
+        SELECT checked_at AT TIME ZONE 'UTC' AS checked_at,
+               http_status, response_time_ms, success, error_message
+        FROM crawl_log WHERE agent_id = %s::uuid ORDER BY checked_at DESC LIMIT 5
+    """, [agent_id])
+    return json.dumps(agent, default=str)
+
+
+@_mcp.tool()
+def submit_domain(domain: str) -> str:
+    """
+    Submit a domain to the Chiwawa crawler queue.
+    The crawler will check /.well-known/agent.json on that domain for an A2A agent card.
+
+    Args:
+        domain: Domain to crawl, e.g. 'example.com' — no https://, no trailing slash.
+    """
+    domain = domain.strip().lower()
+    if not domain or not DOMAIN_RE.match(domain):
+        return json.dumps({"error": "Invalid domain name"})
+    try:
+        conn = get_conn()
+        cur  = conn.cursor()
+        cur.execute(
+            "INSERT INTO seed_domains (domain, source, status) VALUES (%s, 'mcp_submission', 'pending') ON CONFLICT (domain) DO NOTHING",
+            (domain,),
         )
-    return StarletteResponse()
+        inserted = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        return json.dumps({
+            "domain": domain,
+            "queued": inserted,
+            "message": "Added to crawl queue." if inserted else "Domain already known.",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
-async def _messages_endpoint(request: StarletteRequest) -> StarletteResponse:
-    await _sse.handle_post_message(request.scope, request.receive, request._send)
-    return StarletteResponse()
-
-
-app.mount("/mcp", Starlette(routes=[
-    Route("/sse",       _sse_endpoint),
-    Route("/messages/", _messages_endpoint, methods=["POST"]),
-]))
+app.mount("/mcp", _mcp.sse_app())
