@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import base64
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -27,6 +28,80 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ---------------------------------------------------------------------------
+# x402 — machine-native payments for agents
+# Switch PAYMENTS_ENABLED=true in Vercel when ready to monetize.
+# ---------------------------------------------------------------------------
+
+PAYMENTS_ENABLED = os.getenv("PAYMENTS_ENABLED", "false").lower() == "true"
+WALLET           = os.getenv("WALLET_ADDRESS", "0xF0Ea667ce6988a46Ff312ecbAe6d9447E59158f4")
+USDC_BASE        = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"  # USDC on Base mainnet
+FACILITATOR_URL  = os.getenv("X402_FACILITATOR", "https://x402.org/api/v1/verify")
+
+PRICE_LISTING = 1000   # $0.001 — USDC has 6 decimals, so 1000 = $0.001
+PRICE_DETAIL  = 3000   # $0.003
+FREE_LIMIT    = 3      # agents returned per request without payment
+
+_used_nonces: set = set()  # replay protection — resets on cold start, good enough for now
+
+
+def _requirements(price: int, resource: str, description: str) -> dict:
+    return {
+        "scheme": "exact",
+        "network": "base-mainnet",
+        "maxAmountRequired": str(price),
+        "resource": resource,
+        "description": description,
+        "mimeType": "application/json",
+        "payTo": WALLET,
+        "maxTimeoutSeconds": 300,
+        "asset": USDC_BASE,
+        "extra": {"name": "USDC", "version": "2"},
+    }
+
+
+def payment_required(price: int, resource: str, description: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=402,
+        content={
+            "x402Version": 1,
+            "error": "Payment required",
+            "free_tier": f"Call /agents without X-Payment to receive {FREE_LIMIT} results for free.",
+            "accepts": [_requirements(price, resource, description)],
+        },
+    )
+
+
+def verify_payment(header: str, price: int, resource: str, description: str) -> bool:
+    try:
+        import httpx
+        resp = httpx.post(
+            FACILITATOR_URL,
+            json={"payment": header, "paymentRequirements": _requirements(price, resource, description)},
+            timeout=10,
+        )
+        data = resp.json()
+        if not data.get("isValid", False):
+            return False
+        # Replay protection: track nonce so same payment can't be reused
+        try:
+            payload = json.loads(base64.b64decode(header + "=="))
+            nonce = payload.get("payload", {}).get("authorization", {}).get("nonce")
+            if nonce:
+                if nonce in _used_nonces:
+                    return False
+                _used_nonces.add(nonce)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
 
 def get_conn():
     url = os.getenv("DATABASE_URL", "").strip().lstrip('﻿￾')
@@ -62,11 +137,15 @@ def root():
         "agents": row["total"],
         "active_agents": row["active"],
         "docs": "/docs",
+        "payments_enabled": PAYMENTS_ENABLED,
+        "free_tier": {"agents_per_request": FREE_LIMIT},
+        "pricing": {"listing": "$0.001 per request", "detail": "$0.003 per request"},
     })
 
 
 @app.get("/stats")
 def stats():
+    # Always free — no payment check ever
     totals = query("""
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE type = 'a2a') AS a2a,
@@ -104,14 +183,26 @@ def stats():
 
 @app.get("/agents")
 def list_agents(
+    request: Request,
     type: str = Query(None, description="Filter by type: a2a, mcp_live, mcp_package"),
     status: str = Query(None, description="Filter by status: active, degraded, unresponsive, unreachable, gone, archived"),
     search: str = Query(None, description="Search by name or description (case-insensitive)"),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
 ):
-    conditions, params = [], []
+    is_free_tier = False
 
+    if PAYMENTS_ENABLED:
+        payment_header = request.headers.get("X-Payment")
+        if payment_header:
+            if not verify_payment(payment_header, PRICE_LISTING, "/agents", "Agent listing"):
+                return JSONResponse(status_code=402, content={"error": "Invalid or expired payment"})
+        else:
+            limit = FREE_LIMIT
+            page = 1
+            is_free_tier = True
+
+    conditions, params = [], []
     if type:
         conditions.append("type = %s")
         params.append(type)
@@ -141,11 +232,19 @@ def list_agents(
         "limit": limit,
         "pages": max(1, (total + limit - 1) // limit),
         "agents": agents,
+        "free_tier": is_free_tier,
     })
 
 
 @app.get("/agents/{agent_id}")
-def get_agent(agent_id: str):
+def get_agent(request: Request, agent_id: str):
+    if PAYMENTS_ENABLED:
+        payment_header = request.headers.get("X-Payment")
+        if not payment_header:
+            return payment_required(PRICE_DETAIL, f"/agents/{agent_id}", "Full agent detail with skills and crawl history")
+        if not verify_payment(payment_header, PRICE_DETAIL, f"/agents/{agent_id}", "Agent detail"):
+            return JSONResponse(status_code=402, content={"error": "Invalid or expired payment"})
+
     agents = query("""
         SELECT id::text, type, name, description, base_url, card_url,
                provider_name, provider_url, version, status, consecutive_fails,
@@ -174,7 +273,14 @@ def get_agent(agent_id: str):
 
 
 @app.get("/agents/{agent_id}/history")
-def get_history(agent_id: str):
+def get_history(request: Request, agent_id: str):
+    if PAYMENTS_ENABLED:
+        payment_header = request.headers.get("X-Payment")
+        if not payment_header:
+            return payment_required(PRICE_DETAIL, f"/agents/{agent_id}/history", "Agent card change history")
+        if not verify_payment(payment_header, PRICE_DETAIL, f"/agents/{agent_id}/history", "Agent history"):
+            return JSONResponse(status_code=402, content={"error": "Invalid or expired payment"})
+
     rows = query("""
         SELECT id::text, changed_at, previous_hash, new_hash, previous_card, new_card
         FROM agent_card_history
@@ -185,7 +291,14 @@ def get_history(agent_id: str):
 
 
 @app.get("/agents/{agent_id}/crawl_log")
-def get_crawl_log(agent_id: str):
+def get_crawl_log(request: Request, agent_id: str):
+    if PAYMENTS_ENABLED:
+        payment_header = request.headers.get("X-Payment")
+        if not payment_header:
+            return payment_required(PRICE_DETAIL, f"/agents/{agent_id}/crawl_log", "Agent crawl log")
+        if not verify_payment(payment_header, PRICE_DETAIL, f"/agents/{agent_id}/crawl_log", "Agent crawl log"):
+            return JSONResponse(status_code=402, content={"error": "Invalid or expired payment"})
+
     rows = query("""
         SELECT id::text, domain, checked_at, http_status, response_time_ms, success, error_message
         FROM crawl_log
@@ -196,9 +309,11 @@ def get_crawl_log(agent_id: str):
     return jsn(rows)
 
 
-# In-memory rate limiter for submissions (resets on cold start — good enough for a pet project)
-_submissions: dict[str, list] = defaultdict(list)
+# ---------------------------------------------------------------------------
+# Submissions
+# ---------------------------------------------------------------------------
 
+_submissions: dict[str, list] = defaultdict(list)
 DOMAIN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}$')
 
 
