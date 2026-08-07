@@ -65,6 +65,43 @@ def root():
     })
 
 
+@app.get("/stats")
+def stats():
+    totals = query("""
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE type = 'a2a') AS a2a,
+               COUNT(*) FILTER (WHERE type = 'mcp_live') AS mcp_live,
+               COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
+        FROM agents
+    """)[0]
+    by_status = query("""
+        SELECT status, COUNT(*) AS count FROM agents
+        GROUP BY status ORDER BY count DESC
+    """)
+    recent = query("""
+        SELECT id::text, name, type, status, base_url, provider_name,
+               first_seen_at AT TIME ZONE 'UTC' AS first_seen_at
+        FROM agents ORDER BY first_seen_at DESC LIMIT 10
+    """)
+    crawls = query("""
+        SELECT domain, checked_at AT TIME ZONE 'UTC' AS checked_at,
+               http_status, response_time_ms, success, error_message
+        FROM crawl_log ORDER BY checked_at DESC LIMIT 20
+    """)
+    seeds = query("""
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE next_crawl_at IS NULL) AS pending
+        FROM seed_domains
+    """)[0]
+    return jsn({
+        "totals": totals,
+        "by_status": by_status,
+        "recent_agents": recent,
+        "recent_crawls": crawls,
+        "seed_stats": seeds,
+    })
+
+
 @app.get("/agents")
 def list_agents(
     type: str = Query(None, description="Filter by type: a2a, mcp_live, mcp_package"),

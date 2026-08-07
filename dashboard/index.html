@@ -149,7 +149,7 @@
     if (currentType) params.set('type', currentType);
 
     try {
-      const res = await fetch(`/agents?${params}`);
+      const res = await fetch(`https://chiwawa.vercel.app/agents?${params}`);
       const d = await res.json();
 
       const totalPages = Math.ceil(d.total / d.limit);
@@ -175,7 +175,7 @@
 
   async function load() {
     try {
-      const res = await fetch("/data");
+      const res = await fetch("https://chiwawa.vercel.app/stats");
       const d = await res.json();
 
       // Totals
