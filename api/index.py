@@ -309,116 +309,131 @@ def submit_domain(request: Request, body: dict):
 
 # ---------------------------------------------------------------------------
 # MCP Server — Phase 7
-# Agents and Claude can query Chiwawa natively via the MCP protocol.
-# SSE endpoint: GET /mcp/sse  |  Messages: POST /mcp/messages/
+# Pure JSON-RPC implementation — no SDK required, works on Vercel serverless.
+# SSE handshake: GET  /mcp/sse       (sends endpoint URL, keeps alive)
+# Tool calls:    POST /mcp/messages  (JSON-RPC 2.0, responses as HTTP)
 # ---------------------------------------------------------------------------
 
-from mcp.server.fastmcp import FastMCP
+import asyncio
+from fastapi.responses import StreamingResponse, Response as PlainResponse
 
-_mcp = FastMCP(
-    "chiwawa-registry",
-    instructions=(
-        "Chiwawa is a public registry of AI agents discovered automatically "
-        "across A2A and MCP protocols. Use get_stats for an overview, "
-        "search_agents to find agents, and get_agent for full details."
-    ),
-)
-
-
-@_mcp.tool()
-def get_stats() -> str:
-    """
-    Returns aggregate statistics for the Chiwawa AI agent registry:
-    total agents indexed, breakdown by type (A2A, MCP Live, MCP Package),
-    and breakdown by health status (active, degraded, unresponsive, etc.).
-    """
-    totals = query("""
-        SELECT COUNT(*) AS total,
-               COUNT(*) FILTER (WHERE type = 'a2a')         AS a2a,
-               COUNT(*) FILTER (WHERE type = 'mcp_live')    AS mcp_live,
-               COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
-        FROM agents
-    """)[0]
-    by_status = query(
-        "SELECT status, COUNT(*) AS count FROM agents GROUP BY status ORDER BY count DESC"
-    )
-    return json.dumps({"totals": totals, "by_status": by_status}, default=str)
-
-
-@_mcp.tool()
-def search_agents(q: str = "", agent_type: str = "", status: str = "", limit: int = 10) -> str:
-    """
-    Search for AI agents in the Chiwawa registry.
-
-    Args:
-        q: Full-text search on name and description (case-insensitive).
-        agent_type: Filter by type — one of: a2a, mcp_live, mcp_package.
-        status: Filter by health status — one of: active, degraded, unresponsive, unreachable, gone, archived.
-        limit: Number of results to return (1–20, default 10).
-    """
-    limit = min(int(limit), 20)
-    conds, params = [], []
-    if agent_type: conds.append("type = %s");   params.append(agent_type)
-    if status:     conds.append("status = %s"); params.append(status)
-    if q:
-        conds.append("(name ILIKE %s OR description ILIKE %s)")
-        params += [f"%{q}%", f"%{q}%"]
-    where  = ("WHERE " + " AND ".join(conds)) if conds else ""
-    agents = query(f"""
-        SELECT id::text, name, type, status, base_url, description,
-               first_seen_at AT TIME ZONE 'UTC' AS first_seen_at
-        FROM agents {where} ORDER BY first_seen_at DESC LIMIT %s
-    """, params + [limit])
-    return json.dumps({"count": len(agents), "agents": agents}, default=str)
-
-
-@_mcp.tool()
-def get_agent(agent_id: str) -> str:
-    """
-    Get full details for a specific agent by its UUID.
-    Returns provider, version, skills, auth schemes, and last 5 crawl results.
-
-    Args:
-        agent_id: The UUID of the agent (obtain IDs from search_agents results).
-    """
-    rows = query("""
-        SELECT id::text, type, name, description, base_url, provider_name, version,
-               status, consecutive_fails, dns_resolves, ssl_valid,
-               first_seen_at AT TIME ZONE 'UTC' AS first_seen_at,
-               last_seen_at  AT TIME ZONE 'UTC' AS last_seen_at
-        FROM agents WHERE id = %s::uuid
-    """, [agent_id])
-    if not rows:
-        return json.dumps({"error": "Agent not found"})
-    agent = rows[0]
-    agent["skills"] = query(
-        "SELECT skill_id, name, description FROM agent_skills WHERE agent_id = %s::uuid",
-        [agent_id],
-    )
-    agent["auth_schemes"] = [r["scheme"] for r in query(
-        "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [agent_id]
-    )]
-    agent["recent_crawls"] = query("""
-        SELECT checked_at AT TIME ZONE 'UTC' AS checked_at,
-               http_status, response_time_ms, success, error_message
-        FROM crawl_log WHERE agent_id = %s::uuid ORDER BY checked_at DESC LIMIT 5
-    """, [agent_id])
-    return json.dumps(agent, default=str)
+_MCP_TOOLS = [
+    {
+        "name": "get_stats",
+        "description": (
+            "Returns aggregate statistics for the Chiwawa AI agent registry: "
+            "total agents indexed, breakdown by type (A2A, MCP Live, MCP Package), "
+            "and breakdown by health status (active, degraded, unresponsive, etc.)."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "search_agents",
+        "description": (
+            "Search for AI agents in the Chiwawa registry. "
+            "Supports full-text search, type filter, and status filter."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "q":          {"type": "string",  "description": "Full-text search on name and description"},
+                "agent_type": {"type": "string",  "description": "Filter by type: a2a, mcp_live, or mcp_package"},
+                "status":     {"type": "string",  "description": "Filter by status: active, degraded, unresponsive, unreachable, gone, or archived"},
+                "limit":      {"type": "integer", "description": "Results to return (1–20, default 10)", "default": 10},
+            },
+        },
+    },
+    {
+        "name": "get_agent",
+        "description": (
+            "Get full details for a specific agent by UUID: "
+            "provider, version, skills, auth schemes, and last 5 crawl results."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string", "description": "Agent UUID (from search_agents results)"},
+            },
+            "required": ["agent_id"],
+        },
+    },
+    {
+        "name": "submit_domain",
+        "description": (
+            "Submit a domain to the Chiwawa crawler queue. "
+            "The crawler will look for an A2A agent card at /.well-known/agent.json."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "domain": {"type": "string", "description": "Domain to crawl, e.g. 'example.com'"},
+            },
+            "required": ["domain"],
+        },
+    },
+]
 
 
-@_mcp.tool()
-def submit_domain(domain: str) -> str:
-    """
-    Submit a domain to the Chiwawa crawler queue.
-    The crawler will check /.well-known/agent.json on that domain for an A2A agent card.
+def _mcp_call_tool(name: str, args: dict) -> str:
+    if name == "get_stats":
+        totals = query("""
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE type = 'a2a')         AS a2a,
+                   COUNT(*) FILTER (WHERE type = 'mcp_live')    AS mcp_live,
+                   COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
+            FROM agents
+        """)[0]
+        by_status = query(
+            "SELECT status, COUNT(*) AS count FROM agents GROUP BY status ORDER BY count DESC"
+        )
+        return json.dumps({"totals": totals, "by_status": by_status}, default=str)
 
-    Args:
-        domain: Domain to crawl, e.g. 'example.com' — no https://, no trailing slash.
-    """
-    domain = domain.strip().lower()
-    if not domain or not DOMAIN_RE.match(domain):
-        return json.dumps({"error": "Invalid domain name"})
-    try:
+    elif name == "search_agents":
+        q          = args.get("q", "")
+        agent_type = args.get("agent_type", "")
+        status     = args.get("status", "")
+        limit      = min(int(args.get("limit", 10)), 20)
+        conds, params = [], []
+        if agent_type: conds.append("type = %s");   params.append(agent_type)
+        if status:     conds.append("status = %s"); params.append(status)
+        if q:
+            conds.append("(name ILIKE %s OR description ILIKE %s)")
+            params += [f"%{q}%", f"%{q}%"]
+        where  = ("WHERE " + " AND ".join(conds)) if conds else ""
+        agents = query(f"""
+            SELECT id::text, name, type, status, base_url, description,
+                   first_seen_at AT TIME ZONE 'UTC' AS first_seen_at
+            FROM agents {where} ORDER BY first_seen_at DESC LIMIT %s
+        """, params + [limit])
+        return json.dumps({"count": len(agents), "agents": agents}, default=str)
+
+    elif name == "get_agent":
+        aid  = args.get("agent_id", "")
+        rows = query("""
+            SELECT id::text, type, name, description, base_url, provider_name, version,
+                   status, consecutive_fails, dns_resolves, ssl_valid,
+                   first_seen_at AT TIME ZONE 'UTC' AS first_seen_at,
+                   last_seen_at  AT TIME ZONE 'UTC' AS last_seen_at
+            FROM agents WHERE id = %s::uuid
+        """, [aid])
+        if not rows:
+            return json.dumps({"error": "Agent not found"})
+        agent = rows[0]
+        agent["skills"] = query(
+            "SELECT skill_id, name, description FROM agent_skills WHERE agent_id = %s::uuid", [aid])
+        agent["auth_schemes"] = [r["scheme"] for r in query(
+            "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [aid])]
+        agent["recent_crawls"] = query("""
+            SELECT checked_at AT TIME ZONE 'UTC' AS checked_at,
+                   http_status, response_time_ms, success, error_message
+            FROM crawl_log WHERE agent_id = %s::uuid ORDER BY checked_at DESC LIMIT 5
+        """, [aid])
+        return json.dumps(agent, default=str)
+
+    elif name == "submit_domain":
+        domain = args.get("domain", "").strip().lower()
+        if not domain or not DOMAIN_RE.match(domain):
+            return json.dumps({"error": "Invalid domain name"})
         conn = get_conn()
         cur  = conn.cursor()
         cur.execute(
@@ -428,13 +443,65 @@ def submit_domain(domain: str) -> str:
         inserted = cur.rowcount > 0
         conn.commit()
         conn.close()
-        return json.dumps({
-            "domain": domain,
-            "queued": inserted,
-            "message": "Added to crawl queue." if inserted else "Domain already known.",
-        })
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"domain": domain, "queued": inserted,
+                          "message": "Added to crawl queue." if inserted else "Domain already known."})
+
+    return json.dumps({"error": f"Unknown tool: {name}"})
 
 
-app.mount("/mcp", _mcp.sse_app())
+def _mcp_handle(method: str, params: dict, req_id) -> dict | None:
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0", "id": req_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "chiwawa-registry", "version": "0.1.0"},
+            },
+        }
+    elif method == "tools/list":
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": _MCP_TOOLS}}
+    elif method == "tools/call":
+        tool_name = params.get("name", "")
+        try:
+            result = _mcp_call_tool(tool_name, params.get("arguments", {}))
+            return {
+                "jsonrpc": "2.0", "id": req_id,
+                "result": {"content": [{"type": "text", "text": result}], "isError": False},
+            }
+        except Exception as e:
+            return {
+                "jsonrpc": "2.0", "id": req_id,
+                "result": {"content": [{"type": "text", "text": str(e)}], "isError": True},
+            }
+    elif method.startswith("notifications/"):
+        return None  # notifications require no response
+    return {
+        "jsonrpc": "2.0", "id": req_id,
+        "error": {"code": -32601, "message": f"Method not found: {method}"},
+    }
+
+
+@app.get("/mcp/sse")
+async def mcp_sse():
+    async def stream():
+        yield "event: endpoint\ndata: /mcp/messages\n\n"
+        while True:
+            await asyncio.sleep(30)
+            yield ": keep-alive\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/mcp/messages")
+async def mcp_messages(request: Request):
+    body = await request.json()
+    if isinstance(body, list):
+        results = [r for r in (_mcp_handle(b.get("method", ""), b.get("params", {}), b.get("id")) for b in body) if r is not None]
+        return JSONResponse(results) if results else PlainResponse(status_code=202)
+    result = _mcp_handle(body.get("method", ""), body.get("params", {}), body.get("id"))
+    return JSONResponse(result) if result is not None else PlainResponse(status_code=202)
