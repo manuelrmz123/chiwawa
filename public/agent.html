@@ -177,7 +177,7 @@
         <div style="margin-top:40px;">
           <details>
             <summary>Raw agent card JSON</summary>
-            <pre>${JSON.stringify(JSON.parse(a.raw_card), null, 2)}</pre>
+            <pre>${JSON.stringify(typeof a.raw_card === 'string' ? JSON.parse(a.raw_card) : a.raw_card, null, 2)}</pre>
           </details>
         </div>` : '';
 
