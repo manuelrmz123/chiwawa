@@ -145,7 +145,7 @@ def root():
 
 
 @app.get("/stats")
-def stats():
+def stats(request: Request):
     totals = query("""
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE type = 'a2a') AS a2a,
@@ -169,7 +169,7 @@ def stats():
                COUNT(*) FILTER (WHERE next_crawl_at IS NULL) AS pending
         FROM seed_domains
     """)[0]
-    _log_api_call("/stats")
+    _log_api_call("/stats", request)
     return jsn({"totals": totals, "by_status": by_status, "recent_agents": recent,
                 "recent_crawls": crawls, "seed_stats": seeds})
 
@@ -209,7 +209,7 @@ def list_agents(
         FROM agents {where} ORDER BY first_seen_at DESC LIMIT %s OFFSET %s
     """, params + [limit, offset])
 
-    _log_api_call("/agents")
+    _log_api_call("/agents", request)
     return jsn({"total": total, "page": page, "limit": limit,
                 "pages": max(1, (total + limit - 1) // limit),
                 "agents": agents, "free_tier": is_free_tier})
@@ -242,7 +242,7 @@ def get_agent(request: Request, agent_id: str):
         "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [agent_id])]
     agent["io_modes"] = query(
         "SELECT direction, mime_type FROM agent_io_modes WHERE agent_id = %s::uuid", [agent_id])
-    _log_api_call("/agents/{id}")
+    _log_api_call("/agents/{id}", request)
     return jsn(agent)
 
 
@@ -325,21 +325,29 @@ try:
     _mc = get_conn()
     _mc.cursor().execute("""
         CREATE TABLE IF NOT EXISTS mcp_calls (
-            id        BIGSERIAL PRIMARY KEY,
-            called_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            tool_name TEXT        NOT NULL,
-            success   BOOLEAN     NOT NULL DEFAULT TRUE
+            id         BIGSERIAL PRIMARY KEY,
+            called_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            tool_name  TEXT        NOT NULL,
+            success    BOOLEAN     NOT NULL DEFAULT TRUE,
+            ip         TEXT,
+            user_agent TEXT
         )
     """)
+    _mc.cursor().execute("ALTER TABLE mcp_calls ADD COLUMN IF NOT EXISTS ip TEXT")
+    _mc.cursor().execute("ALTER TABLE mcp_calls ADD COLUMN IF NOT EXISTS user_agent TEXT")
     _mc.cursor().execute("CREATE INDEX IF NOT EXISTS mcp_calls_called_at_idx ON mcp_calls (called_at DESC)")
     _mc.cursor().execute("CREATE INDEX IF NOT EXISTS mcp_calls_tool_name_idx ON mcp_calls (tool_name)")
     _mc.cursor().execute("""
         CREATE TABLE IF NOT EXISTS api_calls (
-            id        BIGSERIAL PRIMARY KEY,
-            called_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            endpoint  TEXT        NOT NULL
+            id         BIGSERIAL PRIMARY KEY,
+            called_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            endpoint   TEXT        NOT NULL,
+            ip         TEXT,
+            user_agent TEXT
         )
     """)
+    _mc.cursor().execute("ALTER TABLE api_calls ADD COLUMN IF NOT EXISTS ip TEXT")
+    _mc.cursor().execute("ALTER TABLE api_calls ADD COLUMN IF NOT EXISTS user_agent TEXT")
     _mc.cursor().execute("CREATE INDEX IF NOT EXISTS api_calls_called_at_idx ON api_calls (called_at DESC)")
     _mc.cursor().execute("CREATE INDEX IF NOT EXISTS api_calls_endpoint_idx  ON api_calls (endpoint)")
     _mc.commit()
@@ -348,10 +356,22 @@ except Exception:
     pass
 
 
-def _log_api_call(endpoint: str):
+def _get_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.headers.get("x-real-ip", request.client.host if request.client else "")
+
+
+def _log_api_call(endpoint: str, request: Request = None):
     try:
+        ip = _get_ip(request) if request else None
+        ua = request.headers.get("user-agent") if request else None
         conn = get_conn()
-        conn.cursor().execute("INSERT INTO api_calls (endpoint) VALUES (%s)", (endpoint,))
+        conn.cursor().execute(
+            "INSERT INTO api_calls (endpoint, ip, user_agent) VALUES (%s, %s, %s)",
+            (endpoint, ip, ua),
+        )
         conn.commit()
         conn.close()
     except Exception:
@@ -414,12 +434,12 @@ _MCP_TOOLS = [
 ]
 
 
-def _log_mcp_call(tool_name: str, success: bool):
+def _log_mcp_call(tool_name: str, success: bool, ip: str = None, user_agent: str = None):
     try:
         conn = get_conn()
         conn.cursor().execute(
-            "INSERT INTO mcp_calls (tool_name, success) VALUES (%s, %s)",
-            (tool_name, success),
+            "INSERT INTO mcp_calls (tool_name, success, ip, user_agent) VALUES (%s, %s, %s, %s)",
+            (tool_name, success, ip, user_agent),
         )
         conn.commit()
         conn.close()
@@ -502,7 +522,7 @@ def _mcp_call_tool(name: str, args: dict) -> str:
     return json.dumps({"error": f"Unknown tool: {name}"})
 
 
-def _mcp_handle(method: str, params: dict, req_id) -> dict | None:
+def _mcp_handle(method: str, params: dict, req_id, request: Request = None) -> dict | None:
     if method == "initialize":
         return {
             "jsonrpc": "2.0", "id": req_id,
@@ -516,15 +536,17 @@ def _mcp_handle(method: str, params: dict, req_id) -> dict | None:
         return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": _MCP_TOOLS}}
     elif method == "tools/call":
         tool_name = params.get("name", "")
+        ip = _get_ip(request) if request else None
+        ua = request.headers.get("user-agent") if request else None
         try:
             result = _mcp_call_tool(tool_name, params.get("arguments", {}))
-            _log_mcp_call(tool_name, True)
+            _log_mcp_call(tool_name, True, ip, ua)
             return {
                 "jsonrpc": "2.0", "id": req_id,
                 "result": {"content": [{"type": "text", "text": result}], "isError": False},
             }
         except Exception as e:
-            _log_mcp_call(tool_name, False)
+            _log_mcp_call(tool_name, False, ip, ua)
             return {
                 "jsonrpc": "2.0", "id": req_id,
                 "result": {"content": [{"type": "text", "text": str(e)}], "isError": True},
@@ -556,7 +578,7 @@ async def mcp_sse():
 async def mcp_messages(request: Request):
     body = await request.json()
     if isinstance(body, list):
-        results = [r for r in (_mcp_handle(b.get("method", ""), b.get("params", {}), b.get("id")) for b in body) if r is not None]
+        results = [r for r in (_mcp_handle(b.get("method", ""), b.get("params", {}), b.get("id"), request) for b in body) if r is not None]
         return JSONResponse(results) if results else PlainResponse(status_code=202)
-    result = _mcp_handle(body.get("method", ""), body.get("params", {}), body.get("id"))
+    result = _mcp_handle(body.get("method", ""), body.get("params", {}), body.get("id"), request)
     return JSONResponse(result) if result is not None else PlainResponse(status_code=202)
