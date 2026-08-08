@@ -169,6 +169,7 @@ def stats():
                COUNT(*) FILTER (WHERE next_crawl_at IS NULL) AS pending
         FROM seed_domains
     """)[0]
+    _log_api_call("/stats")
     return jsn({"totals": totals, "by_status": by_status, "recent_agents": recent,
                 "recent_crawls": crawls, "seed_stats": seeds})
 
@@ -208,6 +209,7 @@ def list_agents(
         FROM agents {where} ORDER BY first_seen_at DESC LIMIT %s OFFSET %s
     """, params + [limit, offset])
 
+    _log_api_call("/agents")
     return jsn({"total": total, "page": page, "limit": limit,
                 "pages": max(1, (total + limit - 1) // limit),
                 "agents": agents, "free_tier": is_free_tier})
@@ -240,6 +242,7 @@ def get_agent(request: Request, agent_id: str):
         "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [agent_id])]
     agent["io_modes"] = query(
         "SELECT direction, mime_type FROM agent_io_modes WHERE agent_id = %s::uuid", [agent_id])
+    _log_api_call("/agents/{id}")
     return jsn(agent)
 
 
@@ -317,7 +320,7 @@ def submit_domain(request: Request, body: dict):
 import asyncio
 from fastapi.responses import StreamingResponse, Response as PlainResponse
 
-# Create mcp_calls table on first cold start (idempotent)
+# Create tracking tables on first cold start (idempotent)
 try:
     _mc = get_conn()
     _mc.cursor().execute("""
@@ -330,10 +333,29 @@ try:
     """)
     _mc.cursor().execute("CREATE INDEX IF NOT EXISTS mcp_calls_called_at_idx ON mcp_calls (called_at DESC)")
     _mc.cursor().execute("CREATE INDEX IF NOT EXISTS mcp_calls_tool_name_idx ON mcp_calls (tool_name)")
+    _mc.cursor().execute("""
+        CREATE TABLE IF NOT EXISTS api_calls (
+            id        BIGSERIAL PRIMARY KEY,
+            called_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            endpoint  TEXT        NOT NULL
+        )
+    """)
+    _mc.cursor().execute("CREATE INDEX IF NOT EXISTS api_calls_called_at_idx ON api_calls (called_at DESC)")
+    _mc.cursor().execute("CREATE INDEX IF NOT EXISTS api_calls_endpoint_idx  ON api_calls (endpoint)")
     _mc.commit()
     _mc.close()
 except Exception:
     pass
+
+
+def _log_api_call(endpoint: str):
+    try:
+        conn = get_conn()
+        conn.cursor().execute("INSERT INTO api_calls (endpoint) VALUES (%s)", (endpoint,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 _MCP_TOOLS = [
     {
