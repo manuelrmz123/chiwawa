@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent — Chiwawa</title>
+  <link rel="icon" href="/chiwawa-logo.webp">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/_vercel/insights/script.js"></script>
+  <style>
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    .muted { color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+    .badge {
+      display: inline-block; font-size: 10px; letter-spacing: 0.05em;
+      padding: 2px 7px; border: 1px solid var(--color-divider);
+      font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+    }
+    .badge-a2a   { border-color: #5980a6; color: #5980a6; }
+    .badge-mcp   { border-color: #7a9ab6; color: #416180; }
+    .status-pill {
+      display: inline-block; font-size: 11px; padding: 2px 10px;
+      border-radius: 20px; font-weight: 600; letter-spacing: 0.04em;
+    }
+    .status-active      { background: #e6f4ea; color: #1e7e34; }
+    .status-degraded    { background: #fff3cd; color: #856404; }
+    .status-unresponsive{ background: #fde8e8; color: #b02020; }
+    .status-unreachable { background: #fde8e8; color: #b02020; }
+    .status-gone        { background: #e9ecef; color: #6c757d; }
+    .status-archived    { background: #e9ecef; color: #6c757d; }
+    .stat-card {
+      background: #fff; border: 1px solid var(--color-divider);
+      padding: 16px 20px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: color-mix(in srgb, var(--color-text) 50%, transparent); font-family: var(--font-heading); font-weight: var(--font-heading-weight); }
+    .stat-value { font-size: 22px; font-weight: 700; font-family: var(--font-heading); }
+    .section-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: color-mix(in srgb, var(--color-text) 50%, transparent); margin: 0 0 12px; }
+    .copy-btn {
+      background: none; border: 1px solid var(--color-divider); padding: 3px 10px;
+      font-size: 11px; cursor: pointer; font-family: var(--font-body); color: var(--color-text);
+      transition: background 0.15s;
+    }
+    .copy-btn:hover { background: var(--color-divider); }
+    details summary { cursor: pointer; font-size: 13px; color: var(--color-accent); user-select: none; }
+    details summary:hover { text-decoration: underline; }
+    pre { background: #f8f9fa; border: 1px solid var(--color-divider); padding: 16px; font-size: 11px; overflow-x: auto; margin: 12px 0 0; }
+  </style>
+</head>
+<body>
+<div style="max-width:1100px; margin:0 auto; padding:0 32px 80px;">
+
+  <nav class="nav" style="border-bottom:1px solid var(--color-divider);margin-bottom:40px;">
+    <a href="/" class="nav-brand">
+      <img src="/chiwawa-logo.webp" alt="" style="width:44px;height:44px;border-radius:50%;">
+      Chiwawa
+    </a>
+    <a href="/">Home</a>
+    <a href="/browse.html">Database</a>
+    <a href="/#api">API</a>
+    <a href="https://github.com/manuelrmz123/chiwawa" target="_blank" rel="noopener">GitHub</a>
+  </nav>
+
+  <div id="content">
+    <p class="muted" style="padding:64px 0; text-align:center;">Loading…</p>
+  </div>
+
+</div>
+<script>
+  function fmt(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function fmtTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+      + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function typeBadge(t) {
+    if (t === 'a2a')         return '<span class="badge badge-a2a">A2A</span>';
+    if (t === 'mcp_live')    return '<span class="badge badge-mcp">MCP Live</span>';
+    if (t === 'mcp_package') return '<span class="badge badge-mcp">MCP Package</span>';
+    return `<span class="badge">${t || '—'}</span>`;
+  }
+
+  function statusPill(s) {
+    if (!s) return '—';
+    const cls = `status-${s}`;
+    return `<span class="status-pill ${cls}">${s}</span>`;
+  }
+
+  function yn(val) {
+    if (val === true  || val === 'Yes') return '<span style="color:#1e7e34;font-weight:700;">✓</span>';
+    if (val === false || val === 'No')  return '<span style="color:#b02020;font-weight:700;">✗</span>';
+    return '—';
+  }
+
+  function copyToClipboard(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = orig, 1500);
+    });
+  }
+
+  async function load() {
+    const params = new URLSearchParams(location.search);
+    const id = params.get('id');
+    if (!id) {
+      document.getElementById('content').innerHTML = '<p style="padding:64px 0;text-align:center;color:#b02020;">No agent ID specified.</p>';
+      return;
+    }
+
+    try {
+      const [agentRes, logRes] = await Promise.all([
+        fetch(`/agents/${id}`),
+        fetch(`/agents/${id}/crawl_log`)
+      ]);
+
+      if (!agentRes.ok) {
+        document.getElementById('content').innerHTML = `<p style="padding:64px 0;text-align:center;color:#b02020;">Agent not found.</p>`;
+        return;
+      }
+
+      const a = await agentRes.json();
+      const log = logRes.ok ? await logRes.json() : [];
+
+      document.title = `${a.name || 'Agent'} — Chiwawa`;
+
+      const crawlRows = log.map(r => `
+        <tr>
+          <td class="muted" style="font-size:12px;">${fmtTime(r.checked_at)}</td>
+          <td class="mono">${r.http_status ?? '—'}</td>
+          <td class="mono">${r.response_time_ms != null ? r.response_time_ms + ' ms' : '—'}</td>
+          <td>${r.success ? '<span style="color:#1e7e34;font-weight:700;">✓</span>' : '<span style="color:#b02020;font-weight:700;">✗</span>'}</td>
+          <td class="muted" style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.error_message || ''}</td>
+        </tr>`).join('');
+
+      const skillsSection = (a.skills && a.skills.length) ? `
+        <div style="margin-top:40px;">
+          <p class="section-title">Skills</p>
+          <div style="border:1px solid var(--color-divider);overflow-x:auto;">
+            <table class="table">
+              <thead><tr><th>ID</th><th>Name</th><th>Description</th><th>Tags</th></tr></thead>
+              <tbody>
+                ${a.skills.map(s => `
+                  <tr>
+                    <td class="mono">${s.skill_id || '—'}</td>
+                    <td style="font-weight:500;">${s.name || '—'}</td>
+                    <td class="muted" style="font-size:13px;">${s.description || '—'}</td>
+                    <td class="mono" style="font-size:11px;">${(s.tags || []).join(', ') || '—'}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>` : '';
+
+      const authSection = (a.auth_schemes && a.auth_schemes.length) ? `
+        <div style="margin-top:24px;">
+          <p class="section-title">Auth schemes</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${a.auth_schemes.map(s => `<span class="badge">${s}</span>`).join('')}
+          </div>
+        </div>` : '';
+
+      const ioSection = (a.io_modes && a.io_modes.length) ? `
+        <div style="margin-top:24px;">
+          <p class="section-title">I/O modes</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${a.io_modes.map(m => `<span class="badge">${m.direction}: ${m.mime_type}</span>`).join('')}
+          </div>
+        </div>` : '';
+
+      const cardSection = a.raw_card ? `
+        <div style="margin-top:40px;">
+          <details>
+            <summary>Raw agent card JSON</summary>
+            <pre>${JSON.stringify(JSON.parse(a.raw_card), null, 2)}</pre>
+          </details>
+        </div>` : '';
+
+      const crawlSection = `
+        <div style="margin-top:40px;">
+          <p class="section-title">Recent crawl log</p>
+          ${log.length ? `
+          <div style="border:1px solid var(--color-divider);overflow-x:auto;">
+            <table class="table">
+              <thead><tr><th>Checked at</th><th>HTTP</th><th>Response time</th><th>OK</th><th>Error</th></tr></thead>
+              <tbody>${crawlRows}</tbody>
+            </table>
+          </div>` : '<p class="muted" style="font-size:13px;">No crawl records yet.</p>'}
+        </div>`;
+
+      document.getElementById('content').innerHTML = `
+        <div style="margin-bottom:8px;">
+          <a href="/browse.html" style="font-size:13px;color:var(--color-accent);text-decoration:none;">← Back to registry</a>
+        </div>
+
+        <div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+          <h1 style="font-size:28px;margin:0;flex:1;min-width:0;">${a.name || '—'}</h1>
+          <div style="display:flex;gap:8px;align-items:center;padding-top:6px;">
+            ${typeBadge(a.type)}
+            ${statusPill(a.status)}
+          </div>
+        </div>
+
+        ${a.description ? `<p style="font-size:15px;color:color-mix(in srgb,var(--color-text) 75%,transparent);margin:0 0 20px;max-width:680px;">${a.description}</p>` : ''}
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:40px;">
+          ${a.base_url ? `<a href="${a.base_url}" target="_blank" rel="noopener" class="btn btn-primary" style="text-decoration:none;">Visit agent ↗</a>` : ''}
+          ${a.base_url ? `<button class="copy-btn" onclick="copyToClipboard('${a.base_url.replace(/'/g, "\\'")}', this)">Copy URL</button>` : ''}
+          ${a.card_url ? `<a href="${a.card_url}" target="_blank" rel="noopener" class="copy-btn" style="text-decoration:none;">View agent card ↗</a>` : ''}
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:1px;border:1px solid var(--color-divider);background:var(--color-divider);margin-bottom:40px;">
+          <div class="stat-card">
+            <span class="stat-label">DNS</span>
+            <span class="stat-value">${yn(a.dns_resolves)}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">SSL</span>
+            <span class="stat-value">${yn(a.ssl_valid)}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">HTTP status</span>
+            <span class="stat-value">${a.last_http_status ?? '—'}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Response time</span>
+            <span class="stat-value" style="font-size:18px;">${a.last_response_time_ms != null ? a.last_response_time_ms + ' ms' : '—'}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Fails</span>
+            <span class="stat-value">${a.consecutive_fails ?? '—'}</span>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:20px;margin-bottom:40px;">
+          <div>
+            <p class="section-title" style="margin-bottom:4px;">Provider</p>
+            <p style="margin:0;font-size:14px;">${a.provider_url ? `<a href="${a.provider_url}" target="_blank" rel="noopener" style="color:var(--color-accent);">${a.provider_name || a.provider_url}</a>` : (a.provider_name || '—')}</p>
+          </div>
+          <div>
+            <p class="section-title" style="margin-bottom:4px;">Version</p>
+            <p class="mono" style="margin:0;">${a.version || '—'}</p>
+          </div>
+          <div>
+            <p class="section-title" style="margin-bottom:4px;">First seen</p>
+            <p style="margin:0;font-size:14px;">${fmt(a.first_seen_at)}</p>
+          </div>
+          <div>
+            <p class="section-title" style="margin-bottom:4px;">Last seen</p>
+            <p style="margin:0;font-size:14px;">${fmt(a.last_seen_at)}</p>
+          </div>
+          <div>
+            <p class="section-title" style="margin-bottom:4px;">Last checked</p>
+            <p style="margin:0;font-size:14px;">${fmtTime(a.last_checked_at)}</p>
+          </div>
+          <div>
+            <p class="section-title" style="margin-bottom:4px;">Status changed</p>
+            <p style="margin:0;font-size:14px;">${fmt(a.last_status_change_at)}</p>
+          </div>
+        </div>
+
+        ${skillsSection}
+        ${authSection}
+        ${ioSection}
+        ${crawlSection}
+        ${cardSection}
+      `;
+    } catch (err) {
+      document.getElementById('content').innerHTML = `<p style="padding:64px 0;text-align:center;color:#b02020;">Error loading agent: ${err.message}</p>`;
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>
