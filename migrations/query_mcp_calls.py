@@ -20,7 +20,7 @@ else:
     print("-" * 100)
     for called_at, tool, success, ip, ua in rows:
         ts = str(called_at)[:19]
-        ok = "✓" if success else "✗"
-        ip = (ip or "—")[:18]
-        ua = (ua or "—")[:50]
+        ok = "OK" if success else "FAIL"
+        ip = (ip or "-")[:18]
+        ua = (ua or "-")[:50]
         print(f"{ts:<22} {tool:<18} {ok:<4} {ip:<18} {ua}")

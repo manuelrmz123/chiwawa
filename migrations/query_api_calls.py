@@ -20,6 +20,6 @@ else:
     print("-" * 100)
     for called_at, endpoint, ip, ua in rows:
         ts = str(called_at)[:19]
-        ip = (ip or "—")[:18]
-        ua = (ua or "—")[:50]
+        ip = (ip or "-")[:18]
+        ua = (ua or "-")[:50]
         print(f"{ts:<22} {endpoint:<16} {ip:<18} {ua}")
