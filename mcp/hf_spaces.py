@@ -160,9 +160,8 @@ def run(db_url: str) -> tuple[int, int]:
             if not spaces:
                 break
 
-            # Fresh connection per page — avoids Neon idle timeout
-            conn = psycopg2.connect(db_url)
             batch_new = batch_updated = batch_skipped = 0
+            conn = psycopg2.connect(db_url)
 
             for space in spaces:
                 space_id = space.get("id", "")
@@ -174,7 +173,14 @@ def run(db_url: str) -> tuple[int, int]:
                 seen_ids.add(space_id)
 
                 agent = space_to_agent(space)
-                action = upsert(conn, agent)
+                try:
+                    action = upsert(conn, agent)
+                except psycopg2.OperationalError:
+                    # Reconnect on Neon idle timeout and retry once
+                    conn.close()
+                    conn = psycopg2.connect(db_url)
+                    action = upsert(conn, agent)
+
                 if action == "new":
                     batch_new += 1
                     new_count += 1

@@ -14,6 +14,9 @@ SEARCH_URL = "https://api.github.com/search/repositories"
 QUERIES = [
     "topic:mcp-server",
     "topic:model-context-protocol",
+    "topic:ai-agent",
+    "topic:llm-agent",
+    "topic:autonomous-agent",
 ]
 
 
