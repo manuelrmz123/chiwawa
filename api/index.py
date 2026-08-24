@@ -134,14 +134,54 @@ def root():
     return jsn({
         "name": "Chiwawa",
         "description": "Unified public registry of AI agents across A2A and MCP protocols.",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "agents": row["total"],
         "active_agents": row["active"],
         "docs": "/docs",
-        "mcp": "/mcp/sse",
+        "mcp": "/mcp",
+        "agent_card": "/.well-known/agent.json",
         "payments_enabled": PAYMENTS_ENABLED,
         "free_tier": {"agents_per_request": FREE_LIMIT},
         "pricing": {"listing": "$0.001 per request", "detail": "$0.003 per request"},
+    })
+
+
+@app.get("/.well-known/agent.json")
+def agent_card():
+    return JSONResponse({
+        "agentId": "did:web:chiwawa.vercel.app",
+        "name": "Chiwawa",
+        "description": "Unified public registry of AI agents. Automatically discovers, indexes, and tracks agents across A2A and MCP protocols. Provides identity, health status, and capability data for agents in the ecosystem.",
+        "url": "https://chiwawa.vercel.app",
+        "version": "0.2.0",
+        "provider": {"organization": "Chiwawa", "url": "https://chiwawa.vercel.app"},
+        "capabilities": {"streaming": False, "pushNotifications": False},
+        "authentication": {"schemes": []},
+        "defaultInputModes": ["application/json"],
+        "defaultOutputModes": ["application/json"],
+        "skills": [
+            {
+                "id": "search_agents",
+                "name": "Search Agents",
+                "description": "Search the registry for AI agents by name, capability, or protocol type",
+                "tags": ["discovery", "registry", "search", "a2a", "mcp"],
+                "examples": ["Find agents that process invoices", "List all active A2A agents"],
+            },
+            {
+                "id": "get_agent",
+                "name": "Get Agent",
+                "description": "Retrieve full details, health status, and capability card for a specific agent",
+                "tags": ["registry", "identity", "health"],
+                "examples": ["Get details for agent ID xyz"],
+            },
+            {
+                "id": "submit_agent",
+                "name": "Submit Agent",
+                "description": "Submit a domain to be crawled and indexed in the registry",
+                "tags": ["registry", "submission", "indexing"],
+                "examples": ["Add my-agent.example.com to the registry"],
+            },
+        ],
     })
 
 
