@@ -43,6 +43,16 @@ def get_pending_domains(conn, limit: int = 100) -> list[dict]:
     return [{"id": str(r[0]), "domain": r[1]} for r in rows]
 
 
+def _provider_fields(card: dict) -> tuple[str | None, str | None]:
+    """A2A spec allows provider to be a string or an object."""
+    provider = card.get("provider")
+    if isinstance(provider, str):
+        return provider, None
+    if isinstance(provider, dict):
+        return provider.get("organization"), provider.get("url")
+    return None, None
+
+
 def upsert_agent(conn, result: dict) -> str | None:
     if not result["success"] or not result["card"]:
         return None
@@ -78,7 +88,7 @@ def upsert_agent(conn, result: dict) -> str | None:
                 WHERE id = %s
             """, (
                 card.get("name"), card.get("description"), card.get("url"),
-                card.get("provider", {}).get("organization"), card.get("provider", {}).get("url"),
+                *_provider_fields(card),
                 card.get("version"),
                 json.dumps(card), card_hash,
                 "active", result["status_code"], result["response_time_ms"],
@@ -104,7 +114,7 @@ def upsert_agent(conn, result: dict) -> str | None:
                 ) RETURNING id
             """, (
                 card.get("name"), card.get("description"), card.get("url"), result["url"],
-                card.get("provider", {}).get("organization"), card.get("provider", {}).get("url"),
+                *_provider_fields(card),
                 card.get("version"),
                 json.dumps(card), card_hash,
                 result["status_code"], result["response_time_ms"],
