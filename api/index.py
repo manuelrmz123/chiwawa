@@ -348,6 +348,9 @@ try:
     """)
     _mc.cursor().execute("ALTER TABLE api_calls ADD COLUMN IF NOT EXISTS ip TEXT")
     _mc.cursor().execute("ALTER TABLE api_calls ADD COLUMN IF NOT EXISTS user_agent TEXT")
+    _mc.cursor().execute("ALTER TABLE api_calls ADD COLUMN IF NOT EXISTS query_params TEXT")
+    _mc.cursor().execute("ALTER TABLE api_calls ADD COLUMN IF NOT EXISTS referer TEXT")
+    _mc.cursor().execute("ALTER TABLE api_calls ADD COLUMN IF NOT EXISTS agent_card_url TEXT")
     _mc.cursor().execute("CREATE INDEX IF NOT EXISTS api_calls_called_at_idx ON api_calls (called_at DESC)")
     _mc.cursor().execute("CREATE INDEX IF NOT EXISTS api_calls_endpoint_idx  ON api_calls (endpoint)")
     _mc.commit()
@@ -367,10 +370,22 @@ def _log_api_call(endpoint: str, request: Request = None):
     try:
         ip = _get_ip(request) if request else None
         ua = request.headers.get("user-agent") if request else None
+        # Strip query string to raw params (e.g. "q=search&limit=20"), cap at 500 chars
+        qp = str(request.url.query)[:500] if request and request.url.query else None
+        ref = (request.headers.get("referer") or request.headers.get("referrer") or None)
+        # Agents can self-identify via X-Agent-Card header or ?agent_card= param
+        agent_card = (
+            request.headers.get("x-agent-card")
+            or request.headers.get("x-a2a-card")
+            or request.query_params.get("agent_card")
+            if request else None
+        )
         conn = get_conn()
         conn.cursor().execute(
-            "INSERT INTO api_calls (endpoint, ip, user_agent) VALUES (%s, %s, %s)",
-            (endpoint, ip, ua),
+            """INSERT INTO api_calls
+               (endpoint, ip, user_agent, query_params, referer, agent_card_url)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (endpoint, ip, ua, qp, ref, agent_card),
         )
         conn.commit()
         conn.close()

@@ -32,10 +32,14 @@ mcp_tools = cur.fetchall()
 
 # Recent API calls
 cur.execute("""
-    SELECT called_at AT TIME ZONE 'UTC', endpoint, ip, user_agent
+    SELECT called_at AT TIME ZONE 'UTC', endpoint, ip, user_agent, query_params, referer, agent_card_url
     FROM api_calls ORDER BY called_at DESC LIMIT 20
 """)
 api_recent = cur.fetchall()
+
+# Agent self-identifications
+cur.execute("SELECT COUNT(*) FROM api_calls WHERE agent_card_url IS NOT NULL")
+api_agent_ids = cur.fetchone()[0]
 
 # Recent MCP calls
 cur.execute("""
@@ -47,7 +51,7 @@ mcp_recent = cur.fetchall()
 conn.close()
 
 print("=== API CALLS ===")
-print(f"Total: {api_total}  |  Last 24h: {api_today}")
+print(f"Total: {api_total}  |  Last 24h: {api_today}  |  Agent self-IDs: {api_agent_ids}")
 print(f"First: {api_range[0]}  |  Last: {api_range[1]}")
 print()
 print("By endpoint:")
@@ -55,14 +59,21 @@ for ep, cnt in api_endpoints:
     print(f"  {ep:<25} {cnt}")
 print()
 print("Recent (last 20):")
-print(f"{'Timestamp (UTC)':<22} {'Endpoint':<18} {'IP':<18} User-Agent")
-print("-" * 110)
+print(f"{'Timestamp (UTC)':<22} {'Endpoint':<18} {'IP':<18} {'Agent?':<8} User-Agent")
+print("-" * 115)
 for r in api_recent:
-    ts = str(r[0])[:19]
-    ep = (r[1] or "-")[:18]
-    ip = (r[2] or "-")[:18]
-    ua = (r[3] or "-")[:55]
-    print(f"{ts:<22} {ep:<18} {ip:<18} {ua}")
+    ts  = str(r[0])[:19]
+    ep  = (r[1] or "-")[:18]
+    ip  = (r[2] or "-")[:18]
+    ua  = (r[3] or "-")[:45]
+    qp  = r[4] or ""
+    ref = r[5] or ""
+    acu = r[6] or ""
+    tag = "AGENT" if acu else "-"
+    print(f"{ts:<22} {ep:<18} {ip:<18} {tag:<8} {ua}")
+    if qp:  print(f"  {'params:':<10} {qp[:100]}")
+    if ref: print(f"  {'referer:':<10} {ref[:100]}")
+    if acu: print(f"  {'card:':<10} {acu}")
 
 print()
 print("=== MCP CALLS ===")
