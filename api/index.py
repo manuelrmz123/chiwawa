@@ -624,7 +624,7 @@ def _mcp_handle(method: str, params: dict, req_id, request: Request = None) -> d
         return {
             "jsonrpc": "2.0", "id": req_id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-03-26",
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "chiwawa-registry", "version": "0.1.0"},
             },
@@ -654,6 +654,20 @@ def _mcp_handle(method: str, params: dict, req_id, request: Request = None) -> d
         "jsonrpc": "2.0", "id": req_id,
         "error": {"code": -32601, "message": f"Method not found: {method}"},
     }
+
+
+@app.post("/mcp")
+async def mcp_http(request: Request):
+    """Streamable HTTP transport (MCP spec 2025-03-26) — stateless, serverless-friendly."""
+    body = await request.json()
+    if isinstance(body, list):
+        results = [r for r in (
+            _mcp_handle(b.get("method", ""), b.get("params", {}), b.get("id"), request)
+            for b in body
+        ) if r is not None]
+        return JSONResponse(results) if results else JSONResponse([], status_code=202)
+    result = _mcp_handle(body.get("method", ""), body.get("params", {}), body.get("id"), request)
+    return JSONResponse(result) if result is not None else JSONResponse({}, status_code=202)
 
 
 @app.get("/mcp/sse")

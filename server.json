@@ -2,16 +2,16 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.manuelrmz123/chiwawa",
   "title": "Chiwawa — AI Agent Registry",
-  "description": "Search and discover AI agents across A2A and MCP protocols. 2,000+ agents with health tracking.",
-  "version": "0.1.0",
+  "description": "Search and discover AI agents across A2A and MCP protocols. 7,000+ agents with health tracking.",
+  "version": "0.2.0",
   "repository": {
     "url": "https://github.com/manuelrmz123/chiwawa",
     "source": "github"
   },
   "remotes": [
     {
-      "type": "sse",
-      "url": "https://chiwawa.vercel.app/mcp/sse"
+      "type": "http",
+      "url": "https://chiwawa.vercel.app/mcp"
     }
   ]
 }
