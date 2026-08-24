@@ -146,6 +146,63 @@ def root():
     })
 
 
+@app.get("/.well-known/mcp/server-card.json")
+def mcp_server_card():
+    return JSONResponse({
+        "serverInfo": {
+            "name": "chiwawa-registry",
+            "title": "Chiwawa — AI Agent Registry",
+            "version": "0.2.0",
+            "description": "Search and discover AI agents across A2A and MCP protocols. 7,000+ agents with health tracking.",
+            "websiteUrl": "https://chiwawa.vercel.app",
+        },
+        "tools": [
+            {
+                "name": "search_agents",
+                "description": "Search for AI agents in the Chiwawa registry by name, type, or status.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "q":          {"type": "string",  "description": "Full-text search on name and description"},
+                        "agent_type": {"type": "string",  "description": "Filter by type: a2a, mcp_live, or mcp_package"},
+                        "status":     {"type": "string",  "description": "Filter by status: active, degraded, unresponsive, unreachable, gone, or archived"},
+                        "limit":      {"type": "integer", "description": "Results to return (1–20, default 10)", "default": 10},
+                    },
+                },
+            },
+            {
+                "name": "get_stats",
+                "description": "Returns aggregate statistics for the Chiwawa registry: total agents, breakdown by type and health status.",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "get_agent",
+                "description": "Get full details for a specific agent by UUID: provider, version, skills, auth schemes, and last 5 crawl results.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {"type": "string", "description": "Agent UUID from search_agents results"},
+                    },
+                    "required": ["agent_id"],
+                },
+            },
+            {
+                "name": "submit_domain",
+                "description": "Submit a domain to the Chiwawa crawler queue to be probed for an A2A agent card.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "domain": {"type": "string", "description": "Domain to crawl, e.g. example.com"},
+                    },
+                    "required": ["domain"],
+                },
+            },
+        ],
+        "resources": [],
+        "prompts": [],
+    })
+
+
 @app.get("/.well-known/agent.json")
 def agent_card():
     return JSONResponse({
