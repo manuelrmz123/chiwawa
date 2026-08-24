@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -7,7 +8,8 @@ from datetime import datetime, timezone, timedelta
 
 import psycopg2
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query, HTTPException, Request
+import httpx
+from fastapi import FastAPI, Query, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 load_dotenv()
@@ -73,7 +75,6 @@ def payment_required(price: int, resource: str, description: str) -> JSONRespons
 
 def verify_payment(header: str, price: int, resource: str, description: str) -> bool:
     try:
-        import httpx
         resp = httpx.post(
             FACILITATOR_URL,
             json={"payment": header, "paymentRequirements": _requirements(price, resource, description)},
@@ -145,7 +146,7 @@ def root():
 
 
 @app.get("/stats")
-def stats(request: Request):
+def stats(request: Request, background_tasks: BackgroundTasks):
     totals = query("""
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE type = 'a2a') AS a2a,
@@ -170,6 +171,9 @@ def stats(request: Request):
         FROM seed_domains
     """)[0]
     _log_api_call("/stats", request)
+    card_url = _get_agent_card_url(request)
+    if card_url:
+        background_tasks.add_task(_ingest_agent_card, card_url)
     return jsn({"totals": totals, "by_status": by_status, "recent_agents": recent,
                 "recent_crawls": crawls, "seed_stats": seeds})
 
@@ -177,6 +181,7 @@ def stats(request: Request):
 @app.get("/agents")
 def list_agents(
     request: Request,
+    background_tasks: BackgroundTasks,
     type: str = Query(None, description="Filter by type: a2a, mcp_live, mcp_package"),
     status: str = Query(None, description="Filter by status: active, degraded, unresponsive, unreachable, gone, archived"),
     search: str = Query(None, description="Search by name or description"),
@@ -210,13 +215,16 @@ def list_agents(
     """, params + [limit, offset])
 
     _log_api_call("/agents", request)
+    card_url = _get_agent_card_url(request)
+    if card_url:
+        background_tasks.add_task(_ingest_agent_card, card_url)
     return jsn({"total": total, "page": page, "limit": limit,
                 "pages": max(1, (total + limit - 1) // limit),
                 "agents": agents, "free_tier": is_free_tier})
 
 
 @app.get("/agents/{agent_id}")
-def get_agent(request: Request, agent_id: str):
+def get_agent(request: Request, background_tasks: BackgroundTasks, agent_id: str):
     if PAYMENTS_ENABLED:
         ph = request.headers.get("X-Payment")
         if not ph:
@@ -243,6 +251,9 @@ def get_agent(request: Request, agent_id: str):
     agent["io_modes"] = query(
         "SELECT direction, mime_type FROM agent_io_modes WHERE agent_id = %s::uuid", [agent_id])
     _log_api_call("/agents/{id}", request)
+    card_url = _get_agent_card_url(request)
+    if card_url:
+        background_tasks.add_task(_ingest_agent_card, card_url)
     return jsn(agent)
 
 
@@ -391,6 +402,77 @@ def _log_api_call(endpoint: str, request: Request = None):
         conn.close()
     except Exception:
         pass
+
+
+def _get_agent_card_url(request: Request) -> str | None:
+    return (
+        request.headers.get("x-agent-card")
+        or request.headers.get("x-a2a-card")
+        or request.query_params.get("agent_card")
+    )
+
+
+def _ingest_agent_card(card_url: str):
+    """Background task: fetch an A2A agent card and upsert into registry."""
+    try:
+        if not card_url.startswith("https://"):
+            return
+
+        # Skip if already known
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM agents WHERE card_url = %s", (card_url,))
+        if cur.fetchone():
+            conn.close()
+            return
+        conn.close()
+
+        # Fetch the card
+        resp = httpx.get(card_url, timeout=5, follow_redirects=True,
+                         headers={"User-Agent": "Chiwawa-Registry/0.1"})
+        if resp.status_code != 200:
+            return
+        card = resp.json()
+
+        # Require at minimum name + url (A2A spec)
+        if not card.get("name") or not card.get("url"):
+            return
+
+        provider = card.get("provider") or {}
+        if isinstance(provider, str):
+            provider_name, provider_url = provider, None
+        else:
+            provider_name = provider.get("organization")
+            provider_url  = provider.get("url")
+
+        card_hash = hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest()
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO agents (
+                type, name, description, base_url, card_url,
+                provider_name, provider_url, version,
+                raw_card, card_hash, status, consecutive_fails,
+                last_http_status, dns_resolves, ssl_valid,
+                last_seen_at, last_checked_at, first_seen_at
+            ) VALUES (
+                'a2a', %s, %s, %s, %s,
+                %s, %s, %s,
+                %s::jsonb, %s, 'active', 0,
+                200, true, true,
+                now(), now(), now()
+            ) ON CONFLICT DO NOTHING
+        """, (
+            card.get("name"), card.get("description", ""), card.get("url"), card_url,
+            provider_name, provider_url, card.get("version"),
+            json.dumps(card), card_hash,
+        ))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
 
 _MCP_TOOLS = [
     {
