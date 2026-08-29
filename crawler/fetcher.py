@@ -27,7 +27,7 @@ async def fetch_agent_card(domain: str) -> dict:
 
     try:
         socket.getaddrinfo(domain, 443)
-    except socket.gaierror:
+    except (socket.gaierror, UnicodeError, OSError):
         result["dns_resolves"] = False
         result["error"] = "DNS resolution failed"
         result["response_time_ms"] = int((time.monotonic() - start) * 1000)
