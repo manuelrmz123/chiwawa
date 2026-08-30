@@ -753,6 +753,7 @@ def _mcp_handle(method: str, params: dict, req_id, request: Request = None) -> d
     }
 
 
+@app.post("/mcp/v1")
 @app.post("/mcp")
 async def mcp_http(request: Request):
     """Streamable HTTP transport (MCP spec 2025-03-26) — stateless, serverless-friendly."""
