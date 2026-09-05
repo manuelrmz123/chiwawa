@@ -122,9 +122,16 @@ def upsert_agent(conn, result: dict) -> str | None:
             ))
             agent_id = str(cur.fetchone()[0])
 
-            _upsert_skills(cur, agent_id, card.get("skills", []))
-            _upsert_auth_schemes(cur, agent_id, card.get("authentication", {}).get("schemes", []))
-            _upsert_io_modes(cur, agent_id, card.get("defaultInputModes", []), card.get("defaultOutputModes", []))
+            skills = card.get("skills", [])
+            auth = card.get("authentication")
+            schemes = auth.get("schemes", []) if isinstance(auth, dict) else []
+            input_modes  = card.get("defaultInputModes", [])
+            output_modes = card.get("defaultOutputModes", [])
+            _upsert_skills(cur, agent_id, skills if isinstance(skills, list) else [])
+            _upsert_auth_schemes(cur, agent_id, schemes)
+            _upsert_io_modes(cur, agent_id,
+                             input_modes  if isinstance(input_modes,  list) else [],
+                             output_modes if isinstance(output_modes, list) else [])
 
     conn.commit()
     return agent_id
