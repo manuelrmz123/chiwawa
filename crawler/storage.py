@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 
 def get_connection(db_url: str):
-    return psycopg2.connect(db_url)
+    return psycopg2.connect(db_url, connect_timeout=5)
 
 
 def compute_hash(card: dict) -> str:

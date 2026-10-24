@@ -103,7 +103,7 @@ def verify_payment(header: str, price: int, resource: str, description: str) -> 
 
 def get_conn():
     url = os.getenv("DATABASE_URL", "").strip().lstrip('﻿￾')
-    return psycopg2.connect(url)
+    return psycopg2.connect(url, connect_timeout=5)
 
 
 def query(sql: str, params=None) -> list[dict]:
