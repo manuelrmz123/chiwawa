@@ -141,34 +141,44 @@ def run(db_url: str) -> tuple[int, int]:
         github_repos, external_domains = extract_urls(readme)
         print(f"    Found {len(github_repos)} GitHub repos, {len(external_domains)} external domains")
 
-        for full_name in github_repos:
-            if full_name in seen_repos:
-                continue
-            seen_repos.add(full_name)
-            conn = psycopg2.connect(db_url)
-            try:
-                action = upsert_github_repo(conn, full_name, agent_type)
-            except Exception as e:
-                print(f"    Skipping '{full_name}': {e}")
-                continue
-            finally:
-                conn.close()
-            if action == "new":
-                new_agents += 1
+        # One connection reused for this whole list — not one per item, which
+        # was waking/holding the Neon compute endpoint far more than needed.
+        conn = psycopg2.connect(db_url)
+        try:
+            for full_name in github_repos:
+                if full_name in seen_repos:
+                    continue
+                seen_repos.add(full_name)
+                try:
+                    action = upsert_github_repo(conn, full_name, agent_type)
+                except psycopg2.OperationalError:
+                    conn.close()
+                    conn = psycopg2.connect(db_url)
+                    action = upsert_github_repo(conn, full_name, agent_type)
+                except Exception as e:
+                    conn.rollback()
+                    print(f"    Skipping '{full_name}': {e}")
+                    continue
+                if action == "new":
+                    new_agents += 1
 
-        for domain in external_domains:
-            if domain in seen_domains:
-                continue
-            seen_domains.add(domain)
-            conn = psycopg2.connect(db_url)
-            try:
-                upsert_seed_domain(conn, domain, f"awesome:{repo}")
-            except Exception as e:
-                print(f"    Skipping domain '{domain}': {e}")
-                continue
-            finally:
-                conn.close()
-            new_domains += 1
+            for domain in external_domains:
+                if domain in seen_domains:
+                    continue
+                seen_domains.add(domain)
+                try:
+                    upsert_seed_domain(conn, domain, f"awesome:{repo}")
+                except psycopg2.OperationalError:
+                    conn.close()
+                    conn = psycopg2.connect(db_url)
+                    upsert_seed_domain(conn, domain, f"awesome:{repo}")
+                except Exception as e:
+                    conn.rollback()
+                    print(f"    Skipping domain '{domain}': {e}")
+                    continue
+                new_domains += 1
+        finally:
+            conn.close()
 
         print(f"    Done.")
         time.sleep(1)
