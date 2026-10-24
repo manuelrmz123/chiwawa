@@ -106,15 +106,22 @@ def get_conn():
     return psycopg2.connect(url, connect_timeout=5)
 
 
-def query(sql: str, params=None) -> list[dict]:
-    conn = get_conn()
+def query(sql: str, params=None, conn=None) -> list[dict]:
+    """Run a query. Pass an existing `conn` to reuse it across several calls
+    in one request instead of opening a fresh Postgres connection each time —
+    each connect wakes a scale-to-zero Neon endpoint, which is billed while
+    active regardless of how little work each query does."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_conn()
     try:
         cur = conn.cursor()
         cur.execute(sql, params or [])
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
-        conn.close()
+        if owns_conn:
+            conn.close()
 
 
 def jsn(data):
@@ -244,30 +251,34 @@ def agent_card():
 
 @app.get("/stats")
 def stats(request: Request, background_tasks: BackgroundTasks):
-    totals = query("""
-        SELECT COUNT(*) AS total,
-               COUNT(*) FILTER (WHERE type = 'a2a') AS a2a,
-               COUNT(*) FILTER (WHERE type = 'mcp_live') AS mcp_live,
-               COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
-        FROM agents
-    """)[0]
-    by_status = query("SELECT status, COUNT(*) AS count FROM agents GROUP BY status ORDER BY count DESC")
-    recent = query("""
-        SELECT id::text, name, type, status, base_url, provider_name,
-               first_seen_at AT TIME ZONE 'UTC' AS first_seen_at
-        FROM agents ORDER BY first_seen_at DESC LIMIT 10
-    """)
-    crawls = query("""
-        SELECT domain, checked_at AT TIME ZONE 'UTC' AS checked_at,
-               http_status, response_time_ms, success, error_message
-        FROM crawl_log ORDER BY checked_at DESC LIMIT 20
-    """)
-    seeds = query("""
-        SELECT COUNT(*) AS total,
-               COUNT(*) FILTER (WHERE next_crawl_at IS NULL) AS pending
-        FROM seed_domains
-    """)[0]
-    _log_api_call("/stats", request)
+    conn = get_conn()
+    try:
+        totals = query("""
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE type = 'a2a') AS a2a,
+                   COUNT(*) FILTER (WHERE type = 'mcp_live') AS mcp_live,
+                   COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
+            FROM agents
+        """, conn=conn)[0]
+        by_status = query("SELECT status, COUNT(*) AS count FROM agents GROUP BY status ORDER BY count DESC", conn=conn)
+        recent = query("""
+            SELECT id::text, name, type, status, base_url, provider_name,
+                   first_seen_at AT TIME ZONE 'UTC' AS first_seen_at
+            FROM agents ORDER BY first_seen_at DESC LIMIT 10
+        """, conn=conn)
+        crawls = query("""
+            SELECT domain, checked_at AT TIME ZONE 'UTC' AS checked_at,
+                   http_status, response_time_ms, success, error_message
+            FROM crawl_log ORDER BY checked_at DESC LIMIT 20
+        """, conn=conn)
+        seeds = query("""
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE next_crawl_at IS NULL) AS pending
+            FROM seed_domains
+        """, conn=conn)[0]
+        _log_api_call("/stats", request, conn=conn)
+    finally:
+        conn.close()
     card_url = _get_agent_card_url(request)
     if card_url:
         background_tasks.add_task(_ingest_agent_card, card_url)
@@ -303,15 +314,18 @@ def list_agents(
 
     where  = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     offset = (page - 1) * limit
-    total  = query(f"SELECT COUNT(*) AS n FROM agents {where}", params)[0]["n"]
-    agents = query(f"""
-        SELECT id::text, type, name, description, base_url, provider_name,
-               status, version, consecutive_fails, dns_resolves, ssl_valid,
-               last_http_status, last_seen_at, last_checked_at, first_seen_at
-        FROM agents {where} ORDER BY first_seen_at DESC LIMIT %s OFFSET %s
-    """, params + [limit, offset])
-
-    _log_api_call("/agents", request)
+    conn = get_conn()
+    try:
+        total  = query(f"SELECT COUNT(*) AS n FROM agents {where}", params, conn=conn)[0]["n"]
+        agents = query(f"""
+            SELECT id::text, type, name, description, base_url, provider_name,
+                   status, version, consecutive_fails, dns_resolves, ssl_valid,
+                   last_http_status, last_seen_at, last_checked_at, first_seen_at
+            FROM agents {where} ORDER BY first_seen_at DESC LIMIT %s OFFSET %s
+        """, params + [limit, offset], conn=conn)
+        _log_api_call("/agents", request, conn=conn)
+    finally:
+        conn.close()
     card_url = _get_agent_card_url(request)
     if card_url:
         background_tasks.add_task(_ingest_agent_card, card_url)
@@ -329,25 +343,30 @@ def get_agent(request: Request, background_tasks: BackgroundTasks, agent_id: str
         if not verify_payment(ph, PRICE_DETAIL, f"/agents/{agent_id}", "Agent detail"):
             return JSONResponse(status_code=402, content={"error": "Invalid or expired payment"})
 
-    agents = query("""
-        SELECT id::text, type, name, description, base_url, card_url,
-               provider_name, provider_url, version, status, consecutive_fails,
-               dns_resolves, ssl_valid, last_http_status, last_response_time_ms,
-               last_seen_at, last_checked_at, last_status_change_at, first_seen_at,
-               raw_card, card_hash
-        FROM agents WHERE id = %s::uuid
-    """, [agent_id])
-    if not agents:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    conn = get_conn()
+    try:
+        agents = query("""
+            SELECT id::text, type, name, description, base_url, card_url,
+                   provider_name, provider_url, version, status, consecutive_fails,
+                   dns_resolves, ssl_valid, last_http_status, last_response_time_ms,
+                   last_seen_at, last_checked_at, last_status_change_at, first_seen_at,
+                   raw_card, card_hash
+            FROM agents WHERE id = %s::uuid
+        """, [agent_id], conn=conn)
+        if not agents:
+            raise HTTPException(status_code=404, detail="Agent not found")
 
-    agent = agents[0]
-    agent["skills"] = query(
-        "SELECT skill_id, name, description, tags, examples FROM agent_skills WHERE agent_id = %s::uuid", [agent_id])
-    agent["auth_schemes"] = [r["scheme"] for r in query(
-        "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [agent_id])]
-    agent["io_modes"] = query(
-        "SELECT direction, mime_type FROM agent_io_modes WHERE agent_id = %s::uuid", [agent_id])
-    _log_api_call("/agents/{id}", request)
+        agent = agents[0]
+        agent["skills"] = query(
+            "SELECT skill_id, name, description, tags, examples FROM agent_skills WHERE agent_id = %s::uuid",
+            [agent_id], conn=conn)
+        agent["auth_schemes"] = [r["scheme"] for r in query(
+            "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [agent_id], conn=conn)]
+        agent["io_modes"] = query(
+            "SELECT direction, mime_type FROM agent_io_modes WHERE agent_id = %s::uuid", [agent_id], conn=conn)
+        _log_api_call("/agents/{id}", request, conn=conn)
+    finally:
+        conn.close()
     card_url = _get_agent_card_url(request)
     if card_url:
         background_tasks.add_task(_ingest_agent_card, card_url)
@@ -470,7 +489,8 @@ def _get_ip(request: Request) -> str:
     return request.headers.get("x-real-ip", request.client.host if request.client else "")
 
 
-def _log_api_call(endpoint: str, request: Request = None):
+def _log_api_call(endpoint: str, request: Request = None, conn=None):
+    owns_conn = conn is None
     try:
         ip = _get_ip(request) if request else None
         ua = request.headers.get("user-agent") if request else None
@@ -484,7 +504,8 @@ def _log_api_call(endpoint: str, request: Request = None):
             or request.query_params.get("agent_card")
             if request else None
         )
-        conn = get_conn()
+        if owns_conn:
+            conn = get_conn()
         conn.cursor().execute(
             """INSERT INTO api_calls
                (endpoint, ip, user_agent, query_params, referer, agent_card_url)
@@ -492,7 +513,8 @@ def _log_api_call(endpoint: str, request: Request = None):
             (endpoint, ip, ua, qp, ref, agent_card),
         )
         conn.commit()
-        conn.close()
+        if owns_conn:
+            conn.close()
     except Exception:
         pass
 
@@ -639,16 +661,20 @@ def _log_mcp_call(tool_name: str, success: bool, ip: str = None, user_agent: str
 
 def _mcp_call_tool(name: str, args: dict) -> str:
     if name == "get_stats":
-        totals = query("""
-            SELECT COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE type = 'a2a')         AS a2a,
-                   COUNT(*) FILTER (WHERE type = 'mcp_live')    AS mcp_live,
-                   COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
-            FROM agents
-        """)[0]
-        by_status = query(
-            "SELECT status, COUNT(*) AS count FROM agents GROUP BY status ORDER BY count DESC"
-        )
+        conn = get_conn()
+        try:
+            totals = query("""
+                SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE type = 'a2a')         AS a2a,
+                       COUNT(*) FILTER (WHERE type = 'mcp_live')    AS mcp_live,
+                       COUNT(*) FILTER (WHERE type = 'mcp_package') AS mcp_package
+                FROM agents
+            """, conn=conn)[0]
+            by_status = query(
+                "SELECT status, COUNT(*) AS count FROM agents GROUP BY status ORDER BY count DESC", conn=conn
+            )
+        finally:
+            conn.close()
         return json.dumps({"totals": totals, "by_status": by_status}, default=str)
 
     elif name == "search_agents":
@@ -672,25 +698,29 @@ def _mcp_call_tool(name: str, args: dict) -> str:
 
     elif name == "get_agent":
         aid  = args.get("agent_id", "")
-        rows = query("""
-            SELECT id::text, type, name, description, base_url, provider_name, version,
-                   status, consecutive_fails, dns_resolves, ssl_valid,
-                   first_seen_at AT TIME ZONE 'UTC' AS first_seen_at,
-                   last_seen_at  AT TIME ZONE 'UTC' AS last_seen_at
-            FROM agents WHERE id = %s::uuid
-        """, [aid])
-        if not rows:
-            return json.dumps({"error": "Agent not found"})
-        agent = rows[0]
-        agent["skills"] = query(
-            "SELECT skill_id, name, description FROM agent_skills WHERE agent_id = %s::uuid", [aid])
-        agent["auth_schemes"] = [r["scheme"] for r in query(
-            "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [aid])]
-        agent["recent_crawls"] = query("""
-            SELECT checked_at AT TIME ZONE 'UTC' AS checked_at,
-                   http_status, response_time_ms, success, error_message
-            FROM crawl_log WHERE agent_id = %s::uuid ORDER BY checked_at DESC LIMIT 5
-        """, [aid])
+        conn = get_conn()
+        try:
+            rows = query("""
+                SELECT id::text, type, name, description, base_url, provider_name, version,
+                       status, consecutive_fails, dns_resolves, ssl_valid,
+                       first_seen_at AT TIME ZONE 'UTC' AS first_seen_at,
+                       last_seen_at  AT TIME ZONE 'UTC' AS last_seen_at
+                FROM agents WHERE id = %s::uuid
+            """, [aid], conn=conn)
+            if not rows:
+                return json.dumps({"error": "Agent not found"})
+            agent = rows[0]
+            agent["skills"] = query(
+                "SELECT skill_id, name, description FROM agent_skills WHERE agent_id = %s::uuid", [aid], conn=conn)
+            agent["auth_schemes"] = [r["scheme"] for r in query(
+                "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [aid], conn=conn)]
+            agent["recent_crawls"] = query("""
+                SELECT checked_at AT TIME ZONE 'UTC' AS checked_at,
+                       http_status, response_time_ms, success, error_message
+                FROM crawl_log WHERE agent_id = %s::uuid ORDER BY checked_at DESC LIMIT 5
+            """, [aid], conn=conn)
+        finally:
+            conn.close()
         return json.dumps(agent, default=str)
 
     elif name == "submit_domain":
