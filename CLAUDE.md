@@ -10,7 +10,7 @@ Public discovery platform for AI agents across A2A and MCP protocols. Deployed a
 
 ## Stack
 - **Backend API**: FastAPI (Python), deployed as Vercel serverless functions (`/api/index.py`)
-- **MCP server**: Python, SSE endpoint at `/mcp/sse` (`/mcp/main.py`, `smithery.py`, `github_search.py`)
+- **MCP server**: Python, Streamable HTTP endpoint at `/mcp/v1`, implemented in `api/index.py` (ingestion crawlers live separately in `/mcp/main.py`, `smithery.py`, `github_search.py`)
 - **Crawler**: Python scripts that ingest from Smithery + GitHub (`/mcp/main.py`)
 - **Dashboard**: `/dashboard` (frontend)
 - **Database**: Neon Postgres (connection via `DATABASE_URL` in `.env`)

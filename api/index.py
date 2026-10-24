@@ -421,12 +421,8 @@ def submit_domain(request: Request, body: dict):
 # ---------------------------------------------------------------------------
 # MCP Server — Phase 7
 # Pure JSON-RPC implementation — no SDK required, works on Vercel serverless.
-# SSE handshake: GET  /mcp/sse       (sends endpoint URL, keeps alive)
-# Tool calls:    POST /mcp/messages  (JSON-RPC 2.0, responses as HTTP)
+# Streamable HTTP transport (MCP spec 2025-03-26): POST /mcp/v1 (or /mcp)
 # ---------------------------------------------------------------------------
-
-import asyncio
-from fastapi.responses import StreamingResponse, Response as PlainResponse
 
 # Create tracking tables on first cold start (idempotent)
 try:
@@ -766,28 +762,3 @@ async def mcp_http(request: Request):
         return JSONResponse(results) if results else JSONResponse([], status_code=202)
     result = _mcp_handle(body.get("method", ""), body.get("params", {}), body.get("id"), request)
     return JSONResponse(result) if result is not None else JSONResponse({}, status_code=202)
-
-
-@app.get("/mcp/sse")
-async def mcp_sse():
-    async def stream():
-        yield "event: endpoint\ndata: /mcp/messages\n\n"
-        while True:
-            await asyncio.sleep(30)
-            yield ": keep-alive\n\n"
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/mcp/messages")
-async def mcp_messages(request: Request):
-    body = await request.json()
-    if isinstance(body, list):
-        results = [r for r in (_mcp_handle(b.get("method", ""), b.get("params", {}), b.get("id"), request) for b in body) if r is not None]
-        return JSONResponse(results) if results else PlainResponse(status_code=202)
-    result = _mcp_handle(body.get("method", ""), body.get("params", {}), body.get("id"), request)
-    return JSONResponse(result) if result is not None else PlainResponse(status_code=202)
