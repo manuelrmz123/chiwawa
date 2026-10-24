@@ -180,6 +180,10 @@ def run(db_url: str) -> tuple[int, int]:
                     conn.close()
                     conn = psycopg2.connect(db_url)
                     action = upsert(conn, agent)
+                except Exception as e:
+                    conn.rollback()
+                    print(f"    Skipping '{space_id}': {e}")
+                    continue
 
                 if action == "new":
                     batch_new += 1

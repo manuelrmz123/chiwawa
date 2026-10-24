@@ -148,6 +148,9 @@ def run(db_url: str) -> tuple[int, int]:
             conn = psycopg2.connect(db_url)
             try:
                 action = upsert_github_repo(conn, full_name, agent_type)
+            except Exception as e:
+                print(f"    Skipping '{full_name}': {e}")
+                continue
             finally:
                 conn.close()
             if action == "new":
@@ -160,6 +163,9 @@ def run(db_url: str) -> tuple[int, int]:
             conn = psycopg2.connect(db_url)
             try:
                 upsert_seed_domain(conn, domain, f"awesome:{repo}")
+            except Exception as e:
+                print(f"    Skipping domain '{domain}': {e}")
+                continue
             finally:
                 conn.close()
             new_domains += 1

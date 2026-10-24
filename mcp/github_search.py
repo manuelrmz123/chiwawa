@@ -155,7 +155,13 @@ def run(db_url: str) -> tuple[int, int]:
                     continue
                 seen_ids.add(repo["id"])
 
-                action = upsert(conn, repo)
+                try:
+                    action = upsert(conn, repo)
+                except Exception as e:
+                    conn.rollback()
+                    print(f"    Skipping '{repo.get('full_name', repo['id'])}': {e}")
+                    continue
+
                 if action == "new":
                     new_count += 1
                 else:

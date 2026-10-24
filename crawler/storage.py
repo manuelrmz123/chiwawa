@@ -43,13 +43,30 @@ def get_pending_domains(conn, limit: int = 100) -> list[dict]:
     return [{"id": str(r[0]), "domain": r[1]} for r in rows]
 
 
+def _scalar(v):
+    """Coerce a value from untrusted remote JSON into something psycopg2 can bind.
+    Remote agent cards don't reliably match the A2A spec shape, so any field can
+    show up as a dict/list where a plain value is expected."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    return None
+
+
+def _str_list(v) -> list:
+    """Coerce a value into a list of scalars, dropping anything that can't be
+    adapted (e.g. a dict nested inside what should be a flat tags/examples list)."""
+    if not isinstance(v, list):
+        return []
+    return [_scalar(item) for item in v if _scalar(item) is not None]
+
+
 def _provider_fields(card: dict) -> tuple[str | None, str | None]:
     """A2A spec allows provider to be a string or an object."""
     provider = card.get("provider")
     if isinstance(provider, str):
         return provider, None
     if isinstance(provider, dict):
-        return provider.get("organization"), provider.get("url")
+        return _scalar(provider.get("organization")), _scalar(provider.get("url"))
     return None, None
 
 
@@ -87,9 +104,9 @@ def upsert_agent(conn, result: dict) -> str | None:
                     last_seen_at = now(), last_checked_at = now()
                 WHERE id = %s
             """, (
-                card.get("name"), card.get("description"), card.get("url"),
+                _scalar(card.get("name")), _scalar(card.get("description")), _scalar(card.get("url")),
                 *_provider_fields(card),
-                card.get("version"),
+                _scalar(card.get("version")),
                 json.dumps(card), card_hash,
                 "active", result["status_code"], result["response_time_ms"],
                 result["dns_resolves"], result["ssl_valid"],
@@ -113,9 +130,9 @@ def upsert_agent(conn, result: dict) -> str | None:
                     now(), now(), now()
                 ) RETURNING id
             """, (
-                card.get("name"), card.get("description"), card.get("url"), result["url"],
+                _scalar(card.get("name")), _scalar(card.get("description")), _scalar(card.get("url")), result["url"],
                 *_provider_fields(card),
-                card.get("version"),
+                _scalar(card.get("version")),
                 json.dumps(card), card_hash,
                 result["status_code"], result["response_time_ms"],
                 result["dns_resolves"], result["ssl_valid"]
@@ -140,30 +157,32 @@ def upsert_agent(conn, result: dict) -> str | None:
 def _upsert_skills(cur, agent_id: str, skills: list):
     cur.execute("DELETE FROM agent_skills WHERE agent_id = %s", (agent_id,))
     for skill in skills:
+        if not isinstance(skill, dict):
+            continue
         cur.execute("""
             INSERT INTO agent_skills (agent_id, skill_id, name, description, tags, examples)
             VALUES (%s, %s, %s, %s, %s, %s)
         """, (
             agent_id,
-            skill.get("id"),
-            skill.get("name"),
-            skill.get("description"),
-            skill.get("tags", []),
-            skill.get("examples", [])
+            _scalar(skill.get("id")),
+            _scalar(skill.get("name")),
+            _scalar(skill.get("description")),
+            _str_list(skill.get("tags", [])),
+            _str_list(skill.get("examples", []))
         ))
 
 
 def _upsert_auth_schemes(cur, agent_id: str, schemes: list):
     cur.execute("DELETE FROM agent_auth_schemes WHERE agent_id = %s", (agent_id,))
-    for scheme in schemes:
+    for scheme in _str_list(schemes):
         cur.execute("INSERT INTO agent_auth_schemes (agent_id, scheme) VALUES (%s, %s)", (agent_id, scheme))
 
 
 def _upsert_io_modes(cur, agent_id: str, input_modes: list, output_modes: list):
     cur.execute("DELETE FROM agent_io_modes WHERE agent_id = %s", (agent_id,))
-    for mode in input_modes:
+    for mode in _str_list(input_modes):
         cur.execute("INSERT INTO agent_io_modes (agent_id, direction, mime_type) VALUES (%s, 'input', %s)", (agent_id, mode))
-    for mode in output_modes:
+    for mode in _str_list(output_modes):
         cur.execute("INSERT INTO agent_io_modes (agent_id, direction, mime_type) VALUES (%s, 'output', %s)", (agent_id, mode))
 
 

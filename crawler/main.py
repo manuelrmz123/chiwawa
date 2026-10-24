@@ -23,7 +23,14 @@ async def crawl_domain(domain_info: dict, db_url: str, semaphore: asyncio.Semaph
 
     conn = get_connection(db_url)
     try:
-        agent_id = upsert_agent(conn, result)
+        try:
+            agent_id = upsert_agent(conn, result)
+        except Exception as e:
+            conn.rollback()
+            print(f"  {domain}: upsert_agent failed ({e}) - treating as crawl failure")
+            agent_id = None
+            result = {**result, "success": False, "error": f"storage error: {e}"}
+
         card_hash = compute_hash(result["card"]) if result.get("card") else None
         log_crawl(conn, result, agent_id, card_hash)
 
@@ -56,8 +63,13 @@ async def run_crawl():
     print(f"Crawling {len(domains)} domains...")
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
     tasks = [crawl_domain(d, db_url, semaphore) for d in domains]
-    await asyncio.gather(*tasks)
-    print("Crawl complete.")
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    failures = [(d["domain"], r) for d, r in zip(domains, results) if isinstance(r, Exception)]
+    for domain, err in failures:
+        print(f"  {domain}: unhandled error ({err})")
+
+    print(f"Crawl complete. {len(failures)} domain(s) raised unhandled errors.")
 
 
 if __name__ == "__main__":

@@ -116,7 +116,13 @@ def run(db_url: str) -> tuple[int, int]:
                 "raw_card": s,
             }
 
-            action = upsert(conn, agent)
+            try:
+                action = upsert(conn, agent)
+            except Exception as e:
+                conn.rollback()
+                print(f"    Skipping '{qname}': {e}")
+                continue
+
             if action == "new":
                 new_count += 1
             else:
