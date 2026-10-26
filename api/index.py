@@ -128,6 +128,53 @@ def jsn(data):
     return JSONResponse(content=json.loads(json.dumps(data, default=str)))
 
 
+def _compute_signals(agent: dict, agent_id: str, conn) -> dict:
+    """Phase 2 of the Agent Trust Signals plan: surface data already sitting
+    in crawl_log/agent_card_history/raw_card that nothing currently exposes.
+    Pure computation over existing tables, no new storage, no scoring yet —
+    reuses the connection already open for this request."""
+    first_seen = agent.get("first_seen_at")
+    age_days = None
+    if first_seen:
+        if first_seen.tzinfo is None:
+            first_seen = first_seen.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - first_seen).days
+
+    uptime_row = query("""
+        SELECT COUNT(*) FILTER (WHERE success) * 100.0 / NULLIF(COUNT(*), 0) AS uptime_pct,
+               COUNT(*) AS check_count
+        FROM (
+            SELECT success FROM crawl_log WHERE agent_id = %s::uuid
+            ORDER BY checked_at DESC LIMIT 50
+        ) recent
+    """, [agent_id], conn=conn)[0]
+
+    card_row = query("""
+        SELECT COUNT(*) AS change_count, MAX(changed_at) AS last_changed_at
+        FROM agent_card_history WHERE agent_id = %s::uuid
+    """, [agent_id], conn=conn)[0]
+
+    raw_card = agent.get("raw_card")
+    popularity = {}
+    if isinstance(raw_card, dict):
+        if raw_card.get("stargazers_count") is not None:
+            popularity["github_stars"] = raw_card["stargazers_count"]
+        if raw_card.get("likes") is not None:
+            popularity["hf_likes"] = raw_card["likes"]
+        if raw_card.get("trendingScore") is not None:
+            popularity["hf_trending_score"] = raw_card["trendingScore"]
+
+    uptime_pct = uptime_row["uptime_pct"]
+    return {
+        "age_days": age_days,
+        "uptime_pct": round(float(uptime_pct), 1) if uptime_pct is not None else None,
+        "uptime_sample_size": uptime_row["check_count"],
+        "card_change_count": card_row["change_count"],
+        "last_card_change_at": card_row["last_changed_at"],
+        "external_popularity": popularity or None,
+    }
+
+
 DOMAIN_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}$')
 
 
@@ -307,7 +354,13 @@ def list_agents(
 
     conditions, params = [], []
     if type:   conditions.append("type = %s");   params.append(type)
-    if status: conditions.append("status = %s"); params.append(status)
+    if status:
+        conditions.append("status = %s")
+        params.append(status)
+    else:
+        # Default-exclude confirmed-dead agents from browsing/discovery —
+        # an explicit status= filter (e.g. status=archived) still overrides this.
+        conditions.append("status NOT IN ('gone', 'archived')")
     if search:
         conditions.append("(name ILIKE %s OR description ILIKE %s)")
         params += [f"%{search}%", f"%{search}%"]
@@ -350,7 +403,7 @@ def get_agent(request: Request, background_tasks: BackgroundTasks, agent_id: str
                    provider_name, provider_url, version, status, consecutive_fails,
                    dns_resolves, ssl_valid, last_http_status, last_response_time_ms,
                    last_seen_at, last_checked_at, last_status_change_at, first_seen_at,
-                   raw_card, card_hash
+                   category, raw_card, card_hash
             FROM agents WHERE id = %s::uuid
         """, [agent_id], conn=conn)
         if not agents:
@@ -364,6 +417,7 @@ def get_agent(request: Request, background_tasks: BackgroundTasks, agent_id: str
             "SELECT scheme FROM agent_auth_schemes WHERE agent_id = %s::uuid", [agent_id], conn=conn)]
         agent["io_modes"] = query(
             "SELECT direction, mime_type FROM agent_io_modes WHERE agent_id = %s::uuid", [agent_id], conn=conn)
+        agent["signals"] = _compute_signals(agent, agent_id, conn)
         _log_api_call("/agents/{id}", request, conn=conn)
     finally:
         conn.close()
@@ -684,7 +738,13 @@ def _mcp_call_tool(name: str, args: dict) -> str:
         limit      = min(int(args.get("limit", 10)), 20)
         conds, params = [], []
         if agent_type: conds.append("type = %s");   params.append(agent_type)
-        if status:     conds.append("status = %s"); params.append(status)
+        if status:
+            conds.append("status = %s")
+            params.append(status)
+        else:
+            # Default-exclude confirmed-dead agents — an explicit status
+            # filter still overrides this, same as the REST /agents endpoint.
+            conds.append("status NOT IN ('gone', 'archived')")
         if q:
             conds.append("(name ILIKE %s OR description ILIKE %s)")
             params += [f"%{q}%", f"%{q}%"]
@@ -702,7 +762,7 @@ def _mcp_call_tool(name: str, args: dict) -> str:
         try:
             rows = query("""
                 SELECT id::text, type, name, description, base_url, provider_name, version,
-                       status, consecutive_fails, dns_resolves, ssl_valid,
+                       status, consecutive_fails, dns_resolves, ssl_valid, category, raw_card,
                        first_seen_at AT TIME ZONE 'UTC' AS first_seen_at,
                        last_seen_at  AT TIME ZONE 'UTC' AS last_seen_at
                 FROM agents WHERE id = %s::uuid
@@ -719,6 +779,8 @@ def _mcp_call_tool(name: str, args: dict) -> str:
                        http_status, response_time_ms, success, error_message
                 FROM crawl_log WHERE agent_id = %s::uuid ORDER BY checked_at DESC LIMIT 5
             """, [aid], conn=conn)
+            agent["signals"] = _compute_signals(agent, aid, conn)
+            del agent["raw_card"]  # internal use only for signals; not part of the MCP tool's public shape
         finally:
             conn.close()
         return json.dumps(agent, default=str)
