@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS agents (
     raw_card              jsonb,
     card_hash             text,
     did                   text UNIQUE,
+    category              text,
 
     -- Health & status
     status                text NOT NULL DEFAULT 'active',
